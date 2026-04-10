@@ -5,6 +5,9 @@ services:
       - "0.0.0.0:8847:8847"
     env_file:
       - .env
+    # Uncomment to mount TLS certificates for HTTPS/OAuth support:
+    # volumes:
+    #   - /etc/letsencrypt/live/banana.yourdomain.com:/certs:ro
     restart: unless-stopped
     stop_grace_period: 120s
     mem_limit: 768m
