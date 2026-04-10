@@ -4,6 +4,10 @@ mcp-banana exposes four MCP tools. Claude Code calls these tools via the MCP pro
 
 All handlers follow the same contract: they never return a Go `error`. Validation failures and API errors are encoded in a `CallToolResult` with `IsError: true`. The text content of an error result begins with a safe error code followed by a colon and a human-readable message.
 
+See [Error Codes](security.md#error-mapping-boundary) for the complete list of safe error codes returned by the Gemini layer. See [models.md](models.md) for model alias details.
+
+---
+
 ## generate_image
 
 Generate a new image from a text prompt.
@@ -13,8 +17,8 @@ Generate a new image from a text prompt.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `prompt` | string | Yes | Text description of the image to generate |
-| `model` | string | No | Model alias to use. Defaults to `nano-banana-2` if omitted. See [models.md](models.md) for valid values |
-| `aspect_ratio` | string | No | Aspect ratio for the generated image. Must be one of: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`. Omit to use the model default |
+| `model` | string | No | Model alias. Defaults to `nano-banana-2` if omitted. See [models.md](models.md) |
+| `aspect_ratio` | string | No | One of: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`. Omit to use the model default |
 
 ### Validation
 
@@ -23,8 +27,6 @@ Generate a new image from a text prompt.
 - `aspect_ratio`: if provided, must be one of the five accepted values
 
 ### Success Response
-
-A JSON object with the following fields:
 
 ```json
 {
@@ -38,7 +40,7 @@ A JSON object with the following fields:
 | Field | Type | Description |
 |---|---|---|
 | `image_base64` | string | Standard base64-encoded image data |
-| `mime_type` | string | MIME type of the generated image: `image/png`, `image/jpeg`, or `image/webp` |
+| `mime_type` | string | MIME type of the generated image. The server always requests `image/png`; Gemini may return `image/jpeg` or `image/webp` in rare cases |
 | `model_used` | string | The Nano Banana alias that processed the request (never the internal Gemini model ID) |
 | `generation_time_ms` | integer | Wall-clock time for the Gemini API call in milliseconds |
 
@@ -85,13 +87,13 @@ Modify an existing image using text instructions.
 | `instructions` | string | Yes | Text instructions describing how to edit the image |
 | `image` | string | Yes | Base64-encoded image data (standard encoding, not URL-safe) |
 | `mime_type` | string | Yes | MIME type of the input image: `image/png`, `image/jpeg`, or `image/webp` |
-| `model` | string | No | Model alias to use. Defaults to `nano-banana-2` if omitted |
+| `model` | string | No | Model alias. Defaults to `nano-banana-2` if omitted |
 
 ### Validation
 
-- `instructions`: non-empty, max 10,000 runes, no null bytes (uses the same validator as `prompt`)
+- `instructions`: non-empty, max 10,000 runes, no null bytes
 - `model`: if provided, must be a registered alias
-- `image`: must be valid standard base64; decoded size must not exceed `MCP_MAX_IMAGE_BYTES` (default 4 MB); must be at least 12 bytes after decoding
+- `image`: valid standard base64; decoded size must not exceed `MCP_MAX_IMAGE_BYTES` (default 4 MB); must be at least 12 bytes after decoding
 - `mime_type`: must be `image/png`, `image/jpeg`, or `image/webp`; magic bytes of the decoded image must match the declared MIME type
 
 ### Success Response
@@ -106,6 +108,8 @@ Same structure as `generate_image`:
   "generation_time_ms": 8201
 }
 ```
+
+The server always requests `image/png` output from Gemini; Gemini may return `image/jpeg` or `image/webp` in rare cases.
 
 ### Error Responses
 
@@ -142,15 +146,11 @@ Same structure as `generate_image`:
 
 ## list_models
 
-List all available model aliases and their capabilities. This tool takes no parameters.
-
-### Parameters
-
-None.
+List all available model aliases and their capabilities. Takes no parameters.
 
 ### Success Response
 
-A JSON array of model objects. Each object uses `SafeModelInfo` — the internal Gemini model IDs are never included.
+A JSON array of model objects using `SafeModelInfo` -- internal Gemini model IDs are never included. See [models.md](models.md) for full model details.
 
 ```json
 [
@@ -178,7 +178,7 @@ A JSON array of model objects. Each object uses `SafeModelInfo` — the internal
 ]
 ```
 
-Results are sorted alphabetically by `id`. The array is never empty; at least one model is always registered.
+Results are sorted alphabetically by `id`. The array is never empty.
 
 ### Error Responses
 
@@ -199,16 +199,16 @@ Recommend a model alias based on a task description and optional priority.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `task_description` | string | Yes | Description of the task you want to perform |
-| `priority` | string | No | Optimization priority: `speed`, `quality`, or `balanced`. Defaults to `balanced` if omitted or unrecognized |
+| `priority` | string | No | One of: `speed`, `quality`, `balanced`. Defaults to `balanced` if omitted |
 
 ### Recommendation Logic
 
-1. If `priority` is `speed`, always return `nano-banana-original`.
-2. If `priority` is `quality`, always return `nano-banana-pro`.
-3. Otherwise (`balanced` or empty), scan `task_description` for keywords (case-insensitive):
+1. `priority=speed` -- always return `nano-banana-original`
+2. `priority=quality` -- always return `nano-banana-pro`
+3. `balanced` or empty -- scan `task_description` for keywords (case-insensitive):
    - Pro keywords (first match wins): `professional`, `photorealistic`, `detailed`, `complex`, `final`
-   - Speed keywords (checked if no pro keyword matched): `quick`, `draft`, `sketch`, `iterate`, `batch`, `preview`
-   - No keyword match: return `nano-banana-2` as the default balanced model.
+   - Speed keywords (if no pro keyword matched): `quick`, `draft`, `sketch`, `iterate`, `batch`, `preview`
+   - No keyword match: return `nano-banana-2`
 
 ### Validation
 
@@ -233,12 +233,6 @@ Recommend a model alias based on a task description and optional priority.
   ]
 }
 ```
-
-| Field | Type | Description |
-|---|---|---|
-| `recommended_model` | string | The suggested model alias |
-| `reason` | string | Human-readable explanation of why this model was chosen |
-| `alternatives` | array | Other models with their speed/quality tradeoff notes |
 
 ### Error Responses
 

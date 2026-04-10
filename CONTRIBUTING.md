@@ -1,36 +1,8 @@
 # Contributing
 
-## Prerequisites
+## Setup
 
-| Tool | Version | Required For |
-|---|---|---|
-| Go | 1.24 or later | Building and testing |
-| golangci-lint | v2.1.6 or later | Linting (`make lint`) |
-| Docker | Any recent version | Container builds and testing |
-| OpenSSL | Any | Generating auth tokens |
-
-Install golangci-lint:
-
-```bash
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.1.6
-```
-
-## Getting Started
-
-```bash
-git clone https://github.com/reshinto/mcp-banana.git
-cd mcp-banana
-go mod download
-make build
-```
-
-Set required environment variables:
-
-```bash
-export GEMINI_API_KEY="AIza..."
-```
-
-Before the server can start, verify the model IDs in `internal/gemini/registry.go`. See [docs/models.md](docs/models.md) for the verification procedure.
+See [Setup and Operations](docs/setup-and-operations.md) for prerequisites and local setup steps.
 
 ## Development Commands
 
@@ -55,7 +27,7 @@ Before the server can start, verify the model IDs in `internal/gemini/registry.g
 - No single-character variable names. Use `elementIndex` instead of `i`, `currentNode` instead of `n`.
 - No variable names composed of combined single characters (`ij`, `xy`).
 - Use meaningful names in tests and for temporary variables as well.
-- Common abbreviations are acceptable when their meaning is clear and consistent with the rest of the codebase (see glossary below).
+- Common abbreviations are acceptable when their meaning is clear and consistent (see [Go Glossary](docs/go-guide.md#16-go-glossary)).
 
 ### Imports
 
@@ -89,7 +61,7 @@ Use `fmt.Errorf("context: %w", err)` to wrap errors with context while preservin
 - Never include secrets in log output, error messages, or tool responses. Register secrets with `security.RegisterSecret()` at startup.
 - Never expose `GeminiID` values to Claude Code. Use `SafeModelInfo` for all external responses.
 - Always validate user input through the `security` package before forwarding to the Gemini client.
-- Map all Gemini errors through `gemini.MapError()` - never forward raw error text.
+- Map all Gemini errors through `gemini.MapError()` -- never forward raw error text.
 
 ## Branch Workflow
 
@@ -100,12 +72,7 @@ git checkout main && git pull
 git checkout -b feat/short-description   # or fix/ or chore/
 ```
 
-Branch naming:
-- `feat/<description>` - new feature
-- `fix/<description>` - bug fix
-- `chore/<description>` - maintenance, dependency update, tooling
-
-Never commit directly to `main`.
+Branch naming: `feat/<description>`, `fix/<description>`, `chore/<description>`. Never commit directly to `main`.
 
 ## Quality Gate
 
@@ -115,33 +82,17 @@ Run this before every commit:
 make quality-gate
 ```
 
-This runs lint, format check, vet, and tests in order. All steps must pass. Fix issues iteratively and re-run until all steps are green.
-
-The CI pipeline runs the same sequence. A failing quality gate will block the PR from being merged.
+This runs lint, format check, vet, and tests in order. All steps must pass.
 
 ## Pull Request Process
 
 1. Push your branch: `git push -u origin feat/your-branch`
 2. Open a PR targeting `main`
-3. The PR title must be under 70 characters and use imperative mood ("Add image editing support", not "Added..." or "Adding...")
+3. PR title: under 70 characters, imperative mood ("Add image editing support", not "Added...")
 4. Ensure all CI checks pass
 5. Request review
 
 Every feature or bug fix needs tests. See [docs/testing.md](docs/testing.md) for patterns and the coverage threshold.
-
-## Go Glossary
-
-Common abbreviations used in this codebase:
-
-| Abbreviation | Meaning | Explanation |
-|---|---|---|
-| `err` | error | Holds the error returned by the previous operation. In Go, functions return errors as values, not exceptions, so error handling is explicit. |
-| `ctx` | context | Carries request-scoped deadlines, cancellation signals, and metadata across API boundaries. Essential for managing timeouts and coordinating shutdown. |
-| `req` | request | The incoming tool call or HTTP request. Contains arguments, headers, and body. |
-| `resp` | response | The HTTP or API response received from an upstream service. Contains status code, headers, and body. |
-| `cfg` | config | The parsed application configuration loaded from environment variables at startup. |
-| `srv` | server | The HTTP server instance or MCP server. In this project: `*http.Server` or `*mcpserver.MCPServer`. |
-| `test` | test | The Go test runner (`*testing.T`) that provides logging and failure reporting. Used in all unit tests. |
 
 ## Further Reading
 

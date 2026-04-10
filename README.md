@@ -25,23 +25,15 @@ export GEMINI_API_KEY="AIza..."
 ./mcp-banana --transport stdio
 ```
 
-Add to Claude Code (user-scoped):
-
-```bash
-claude mcp add-json --scope user banana '{
-  "command": "/path/to/mcp-banana",
-  "args": ["--transport", "stdio"],
-  "env": {"GEMINI_API_KEY": "<your-key>"},
-  "type": "stdio"
-}'
-```
+See [Claude Code Integration](docs/claude-code-integration.md) for full setup instructions.
 
 ## Documentation
 
 | Document | Description |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System design, package layout, request flow, startup sequence |
-| [docs/setup-and-operations.md](docs/setup-and-operations.md) | Local setup, production deployment, CI/CD pipeline, monitoring |
+| [docs/authentication.md](docs/authentication.md) | SSH tunnel, single token, and per-user token auth options |
+| [docs/setup-and-operations.md](docs/setup-and-operations.md) | Local setup, configuration reference, production deployment |
 | [docs/tools-reference.md](docs/tools-reference.md) | MCP tool schemas, parameters, success and error responses |
 | [docs/models.md](docs/models.md) | Model aliases, verification status, sentinel ID procedure |
 | [docs/security.md](docs/security.md) | Threat model, input validation, error mapping, HTTP error contract |
@@ -49,6 +41,7 @@ claude mcp add-json --scope user banana '{
 | [docs/testing.md](docs/testing.md) | Test inventory, patterns, coverage threshold |
 | [docs/go-guide.md](docs/go-guide.md) | Go language concepts used in this codebase, with examples |
 | [docs/root-files.md](docs/root-files.md) | Description of every root-level file |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems, error messages, and fixes |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, coding standards, PR process |
 
 ## License

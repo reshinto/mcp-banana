@@ -19,15 +19,9 @@ The repository includes a `.mcp.json` with a project-scoped stdio configuration.
 
 Stdio mode runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
 
-### Prerequisites
-
-- Build the binary: `make build`
-- Obtain a Gemini API key from [https://aistudio.google.com/](https://aistudio.google.com/)
-- Verify and update model IDs in `internal/gemini/registry.go` (see [models.md](models.md))
+**Prerequisites:** Build the binary (`make build`), obtain a Gemini API key, and verify model IDs in `internal/gemini/registry.go` (see [models.md](models.md)).
 
 ### User-Scoped Setup (Secrets Stored Locally)
-
-Use this when you want to store your API key in your own Claude Code configuration:
 
 ```bash
 claude mcp add-json --scope user banana '{
@@ -40,11 +34,9 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
-Replace `/usr/local/bin/mcp-banana` with the actual path to your built binary. Replace `<your-gemini-api-key>` with your key. The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
+Replace `/usr/local/bin/mcp-banana` with the actual path to your built binary. The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
 
 ### Project-Scoped Setup (No Secrets, Committed to Repo)
-
-Use this to share the server configuration with your team without sharing credentials:
 
 ```bash
 claude mcp add-json --scope project banana '{
@@ -54,11 +46,13 @@ claude mcp add-json --scope project banana '{
 }'
 ```
 
-This configuration is saved to `.mcp.json` and is already committed in this repository. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on the `PATH`.
+This configuration is saved to `.mcp.json` and is already committed in this repository. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on `PATH`.
 
 ## Option B: Remote HTTP Mode (For a Deployed Server)
 
 HTTP mode connects Claude Code to a running mcp-banana server over the network. Every request requires a bearer token in the `Authorization` header.
+
+For auth setup details (SSH tunnel, single token, or per-user tokens), see [authentication.md](authentication.md).
 
 ### Basic HTTP Connection
 
@@ -72,19 +66,15 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
-Replace `<server-ip>` with your droplet's IP address and `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from the server's `.env` file.
+### SSH Tunnel (Recommended for Production)
 
-### SSH Tunnel Hardening (Recommended)
-
-Running the server behind an SSH tunnel prevents exposing port 8847 to the public internet. The server binds to `127.0.0.1:8847` inside Docker (see `docker-compose.yml`), so this is the recommended production setup.
-
-Open the tunnel in a terminal (keep it running):
+The server binds to `127.0.0.1:8847` inside Docker (not publicly exposed). Open a tunnel first:
 
 ```bash
 ssh -N -L 8847:127.0.0.1:8847 <user>@<droplet-ip>
 ```
 
-Then add the server using `localhost` as the address:
+Then connect using `localhost`:
 
 ```bash
 claude mcp add-json --scope user banana '{
@@ -96,18 +86,16 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
-With the tunnel running, Claude Code connects to `localhost:8847`, which SSH forwards to `127.0.0.1:8847` on the remote server. The bearer token travels over the encrypted SSH connection.
-
 ## Verification
 
-After adding the server, verify it appears in Claude Code's configuration:
+After adding the server:
 
 ```bash
 claude mcp list
 claude mcp get banana
 ```
 
-Both commands should show the `banana` server entry. If the server is configured correctly and the model IDs are verified, Claude Code will be able to call all four tools.
+Both commands should show the `banana` server entry. If configured correctly and model IDs are verified, Claude Code will be able to call all four tools.
 
 ## Troubleshooting
 
@@ -116,10 +104,12 @@ Both commands should show the `banana` server entry. If the server is configured
 | `claude mcp list` does not show `banana` | Server was not added | Re-run `claude mcp add-json` with the correct `--scope` |
 | `GEMINI_API_KEY is required` error on startup | API key not set | Add the `env` block to your user-scoped config or set the variable in your shell |
 | `registry validation failed: model "..." has unverified GeminiID` | Sentinel model IDs still present | Follow the verification procedure in [models.md](models.md) |
-| HTTP 401 Unauthorized | Wrong or missing auth token | Verify `MCP_AUTH_TOKEN` on the server matches the token in your Claude Code config |
-| `Connection refused` on HTTP mode | SSH tunnel not running or server is down | Start the SSH tunnel or check the remote server with `curl http://localhost:8847/healthz` |
-| Server starts but tools return errors | Gemini API issue or quota exceeded | Check logs with `docker compose logs -f mcp-banana` on the remote server |
-| Binary not found | `mcp-banana` not on PATH | Use the full absolute path in `command`, or run `make build` and copy the binary to `/usr/local/bin/` |
+| HTTP 401 Unauthorized | Wrong or missing auth token | Verify the token in your Claude Code config matches the server |
+| `Connection refused` on HTTP mode | SSH tunnel not running or server is down | Start the tunnel or check the server with `curl http://localhost:8847/healthz` |
+| Server starts but tools return errors | Gemini API issue or quota exceeded | Check `docker compose logs -f mcp-banana` on the remote server |
+| Binary not found | `mcp-banana` not on PATH | Use the full absolute path in `command`, or copy the binary to `/usr/local/bin/` |
+
+See [troubleshooting.md](troubleshooting.md) for additional common issues and debugging steps.
 
 ## Verifying Tool Access
 

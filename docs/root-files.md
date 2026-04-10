@@ -85,7 +85,7 @@ Template for the server's runtime configuration. Copy to `.env` and fill in valu
 cp .env.example .env
 ```
 
-Documents all eight environment variables with their purpose, default values, and validation constraints. The `.env` file itself is excluded from version control by `.gitignore`.
+Documents all environment variables with their purpose, default values, and validation constraints. The `.env` file itself is excluded from version control by `.gitignore`.
 
 ### `.mcp.json`
 
@@ -121,19 +121,15 @@ golangci-lint v2 configuration. Enables five linters:
 
 `fieldalignment` is explicitly disabled because optimizing struct field order for memory alignment hurts readability without meaningful benefit at this scale.
 
-## CI/CD
+## CI
 
 ### `.github/workflows/ci.yml`
 
-Continuous integration workflow. Triggers on pushes to `feat/**`, `fix/**`, `chore/**` branches and on pull requests to `main`. Also callable via `workflow_call` from the CD workflow.
+Continuous integration workflow. Triggers on pushes to `feat/**`, `fix/**`, `chore/**` branches and on pull requests to `main`.
 
 Steps: lint, format check, vet, test with 80% coverage enforcement, binary build, binary size check (15 MB limit), Docker image build, Docker image size check (25 MB limit). All action versions are pinned to commit SHAs for supply chain security.
 
-### `.github/workflows/cd.yml`
-
-Continuous deployment workflow. Triggers only on pushes to `main`. Uses `concurrency: group: deploy-production` with `cancel-in-progress: false` to prevent concurrent deployments.
-
-Invokes `ci.yml` via `workflow_call` first. Blocks deployment if sentinel model IDs are still present. SSH-deploys to the DigitalOcean droplet, polls `/healthz` for up to 30 seconds, and auto-rolls back to the previous commit if the health check fails.
+Deployment to production is done manually via SSH. There is no automated CD pipeline.
 
 ## Version Control
 

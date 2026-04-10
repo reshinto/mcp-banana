@@ -4,28 +4,7 @@
 
 mcp-banana implements a defense-in-depth security model. Secrets are isolated in server memory and never cross any trust boundary. All user input is validated before reaching the Gemini API. Raw API errors are mapped to a strict allowlist of safe messages before being returned to Claude Code.
 
-## Security Boundaries
-
-![Security Boundaries](diagrams/security-boundaries.png)
-
-Three trust zones exist:
-
-- **Claude Code** (untrusted input) - sends tool calls over stdio or HTTP. Input from this zone is always validated.
-- **mcp-banana** (trusted server) - holds secrets in memory, validates all input, maps all errors.
-- **Gemini API** (external service) - receives only validated prompts and decoded image bytes. Raw responses, including errors, are never forwarded directly to Claude Code.
-
-## Middleware Chain
-
-![Middleware Chain](diagrams/middleware-chain.png)
-
-In HTTP mode every request passes through the following layers. `/healthz` is the only path that bypasses this chain.
-
-1. **Panic recovery** - a deferred `recover()` catches any panics and returns 500 rather than crashing the server.
-2. **Health check bypass** - `/healthz` skips all remaining middleware.
-3. **Bearer token authentication** - checks `Authorization: Bearer <token>` against `MCP_AUTH_TOKEN`.
-4. **Rate limiting** - enforces `MCP_RATE_LIMIT` requests per minute using a token bucket.
-5. **Global concurrency semaphore** - caps simultaneous in-flight requests at `MCP_GLOBAL_CONCURRENCY`.
-6. **Body size enforcement** - rejects request bodies exceeding 15 MB.
+See [architecture.md](architecture.md) for security boundary diagrams and the middleware chain.
 
 ## Secret Isolation
 
@@ -79,7 +58,7 @@ This prevents a client from claiming a file is a PNG when it is not.
 The mapping works in two stages:
 
 1. If the error is a `*genai.APIError`, extract only the HTTP status code and map it to a safe code.
-2. Otherwise, classify the error by substring patterns in the message text (for classification only - the matched text is discarded).
+2. Otherwise, classify the error by substring patterns in the message text (for classification only -- the matched text is discarded).
 
 Five safe error codes form the complete allowlist:
 
@@ -133,7 +112,7 @@ No other error text may reach Claude Code.
 
 | Control | Where Applied | Configurable |
 |---|---|---|
-| Bearer token auth | HTTP middleware, every request except `/healthz` | `MCP_AUTH_TOKEN` |
+| Bearer token auth | HTTP middleware, every request except `/healthz` | `MCP_AUTH_TOKEN` / `MCP_AUTH_TOKENS_FILE` |
 | Rate limiting | HTTP middleware | `MCP_RATE_LIMIT` |
 | Global concurrency limit | HTTP middleware | `MCP_GLOBAL_CONCURRENCY` |
 | Pro-model concurrency limit | Gemini client, semaphore | `MCP_PRO_CONCURRENCY` |
