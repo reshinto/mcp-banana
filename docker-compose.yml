@@ -2,7 +2,7 @@ services:
   mcp-banana:
     build: .
     ports:
-      - "127.0.0.1:8847:8847"
+      - "0.0.0.0:8847:8847"
     env_file:
       - .env
     restart: unless-stopped
