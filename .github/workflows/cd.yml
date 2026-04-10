@@ -1,0 +1,114 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Ensure only one deployment runs at a time
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  # CI must pass first -- reuse ci.yml via workflow_call
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy to DigitalOcean
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+      - name: Check for sentinel model IDs
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        # Guard: block deployment if sentinel IDs are still present.
+        # This prevents deploying a build that will fail on startup.
+      - name: Block deploy if model IDs unverified
+        run: |
+          if grep -r "VERIFY_MODEL_ID_BEFORE_RELEASE" internal/gemini/registry.go; then
+            echo "DEPLOYMENT BLOCKED: Sentinel model IDs still present in registry."
+            echo "Replace all VERIFY_MODEL_ID_BEFORE_RELEASE values with verified Gemini model IDs before deploying."
+            exit 1
+          fi
+
+      # Pin action to commit SHA for supply chain security.
+      # SHA is pinned. Update when intentionally upgrading this action.
+      - name: Deploy, verify, and auto-rollback on failure
+        uses: appleboy/ssh-action@2ead5e36573ebcdced20eb94e652a0a18e2e5745 # v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          script: |
+            # -u: fail on unset variables. -o pipefail: fail on pipe errors.
+            # -e is deliberately omitted: each critical command is guarded with
+            # explicit `if !` checks that trigger the rollback function. Using -e
+            # would exit before rollback could run.
+            set -uo pipefail
+            cd /opt/mcp-banana
+            PREV_SHA=$(git rev-parse HEAD)
+            echo "Current SHA: $PREV_SHA"
+
+            # Rollback function used by all failure paths
+            rollback() {
+              echo "Auto-rolling back to $PREV_SHA..."
+              git reset --hard "$PREV_SHA"
+              docker compose up -d --build --force-recreate
+              sleep 10
+              if curl -sf http://127.0.0.1:8847/healthz > /dev/null 2>&1; then
+                echo "Rollback successful -- server is back on $PREV_SHA"
+              else
+                echo "WARNING: Rollback container also failed. Manual intervention required."
+              fi
+              echo "Deployment of $NEW_SHA failed. Server is running $PREV_SHA."
+            }
+
+            echo "Fetching new code..."
+            if ! git fetch origin main; then
+              echo "git fetch failed"
+              NEW_SHA="(fetch failed)"
+              rollback
+              exit 1
+            fi
+
+            if ! git reset --hard origin/main; then
+              echo "git reset failed"
+              NEW_SHA="(reset failed)"
+              rollback
+              exit 1
+            fi
+
+            NEW_SHA=$(git rev-parse HEAD)
+            echo "New SHA: $NEW_SHA"
+
+            echo "Building and starting new container..."
+            if ! docker compose up -d --build --force-recreate; then
+              echo "docker compose build/start failed"
+              rollback
+              exit 1
+            fi
+
+            echo "Waiting for health check (30s max)..."
+            for attempt in 1 2 3 4 5 6; do
+              if curl -sf http://127.0.0.1:8847/healthz > /dev/null 2>&1; then
+                HEALTH_RESPONSE=$(curl -sf http://127.0.0.1:8847/healthz)
+                if [ "$HEALTH_RESPONSE" = '{"status":"ok"}' ]; then
+                  echo "Deploy successful! Health check passed on attempt $attempt"
+                  docker image prune -f
+                  exit 0
+                fi
+              fi
+              echo "Attempt $attempt: not ready, waiting 5s..."
+              sleep 5
+            done
+
+            echo "Health check FAILED after 30 seconds!"
+            rollback
+            exit 1
