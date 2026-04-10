@@ -1,5 +1,6 @@
 # Binaries
 mcp-banana
+!cmd/mcp-banana/
 *.exe
 
 # Environment
