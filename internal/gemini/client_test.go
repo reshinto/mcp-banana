@@ -571,6 +571,41 @@ func TestEditImage_ProModelContextCancelled(test *testing.T) {
 	}
 }
 
+// TestOverrideClientFactory verifies that OverrideClientFactory swaps the factory and
+// that the returned restore function resets it to the original.
+func TestOverrideClientFactory(test *testing.T) {
+	originalFactory := genaiClientFactory
+
+	called := false
+	restore := OverrideClientFactory(func(_ context.Context, _ *genai.ClientConfig) (*genai.Client, error) {
+		called = true
+		return nil, errors.New("overridden factory error")
+	})
+
+	_, clientError := NewClient(context.Background(), "test-key", 30, 2)
+	if !called {
+		test.Error("expected overridden factory to be called")
+	}
+	if clientError == nil {
+		test.Error("expected error from overridden factory")
+	}
+
+	restore()
+
+	// After restore, genaiClientFactory should point to the original.
+	// We can't compare function pointers directly, but we can verify the
+	// factory is no longer the override by checking it's not the one we set.
+	// The best check is that a new call uses the real factory (which may fail
+	// for a different reason, but it should not set called=true again).
+	called = false
+	_, _ = NewClient(context.Background(), "test-key", 30, 2)
+	if called {
+		test.Error("expected original factory to be restored, but override was still called")
+	}
+
+	_ = originalFactory // suppress unused warning if any
+}
+
 // TestProSemaphoreCancellation verifies that context cancellation releases the pro slot wait.
 func TestProSemaphoreCancellation(test *testing.T) {
 	// Create a client with a semaphore of size 1 to easily fill it.
