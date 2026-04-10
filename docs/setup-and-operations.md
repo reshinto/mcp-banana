@@ -4,8 +4,8 @@
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.24 or later | Build from source |
-| golangci-lint | v2.1.6 or later | Code linting (development) |
+| Go | 1.26 or later | Build from source |
+| golangci-lint | v2.11.4 or later | Code linting (development) |
 | Docker | Any recent version | Container deployment |
 | Docker Compose | v2 | Multi-container deployment |
 | OpenSSL | Any | Generating auth tokens |
@@ -14,7 +14,7 @@
 Install golangci-lint:
 
 ```bash
-go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.1.6
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.4
 ```
 
 ## Local Development Setup

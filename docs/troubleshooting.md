@@ -11,8 +11,8 @@
 | Image generation always fails | `generation_failed: ...` | API key may be invalid or revoked | Test the key directly: `curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY"` |
 | Pro model queue timeout | `{"error":"server_busy"}` (HTTP 503) | All `MCP_PRO_CONCURRENCY` slots are occupied | Lower `MCP_PRO_CONCURRENCY` demand or increase `MCP_GLOBAL_CONCURRENCY` in `.env` |
 | Claude Code doesn't discover tools | Server registered but tools are invisible | Server process crashed or model IDs not verified | Run `claude mcp get banana`, check the path and env, then restart Claude Code |
-| Wrong Go version | `go: go.mod requires go >= 1.24` | Go version is too old | Install Go 1.24+ from [go.dev/dl](https://go.dev/dl/) |
-| golangci-lint not installed | `golangci-lint: command not found` | Tool not in PATH | `go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.1.6` |
+| Wrong Go version | `go: go.mod requires go >= 1.26` | Go version is too old | Install Go 1.26+ from [go.dev/dl](https://go.dev/dl/) |
+| golangci-lint not installed | `golangci-lint: command not found` | Tool not in PATH | `go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.4` |
 | Rate limit hit | `{"error":"rate_limited"}` (HTTP 429) | Exceeded `MCP_RATE_LIMIT` requests per minute | Wait for the bucket to refill, or increase `MCP_RATE_LIMIT` in `.env` |
 
 ## How to Debug
