@@ -3,82 +3,110 @@
 # Usage: ./scripts/run-docker-prod.sh
 #
 # This script:
-#   1. Reads MCP_DOMAIN from .env
-#   2. Auto-populates OAUTH_BASE_URL and TLS paths in .env
-#   3. Checks for TLS certificates — offers to generate them if missing
-#   4. Starts the production Docker stack
+#   1. Validates .env and MCP_DOMAIN
+#   2. Auto-populates OAUTH_BASE_URL, TLS paths, and MCP_AUTH_TOKEN in .env
+#   3. Generates TLS certificates if missing (via certbot)
+#   4. Validates all required files exist before deployment
+#   5. Starts the production Docker stack
+#   6. Verifies the server is healthy before reporting success
+#
+# The script stops immediately if any step fails. Docker will not start
+# unless all prerequisites are met.
 #
 # Prerequisites:
 #   - Docker and Docker Compose installed
 #   - .env file with MCP_DOMAIN set
 #   - DNS A record for <MCP_DOMAIN> pointing to this server
-#
-# The server binds to 0.0.0.0:8847 (all interfaces) with TLS.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+echo "=== mcp-banana production deployment ==="
+echo ""
+
+# --- Step 1: Validate .env exists ---
 if [ ! -f .env ]; then
-  echo "ERROR: .env file not found. Copy .env.example and configure it:" >&2
-  echo "  cp .env.example .env" >&2
+  echo "FAILED: .env file not found." >&2
+  echo "  Run: cp .env.example .env" >&2
+  echo "  Then set MCP_DOMAIN in .env and re-run this script." >&2
   exit 1
 fi
+echo "[ok] .env file found"
 
-# Load .env to read MCP_DOMAIN
+# Load .env
 set -a
 # shellcheck disable=SC1091
 source .env
 set +a
 
+# --- Step 2: Validate MCP_DOMAIN ---
 DOMAIN="${MCP_DOMAIN:-}"
 if [ -z "$DOMAIN" ]; then
-  echo "ERROR: MCP_DOMAIN is not set in .env" >&2
+  echo "FAILED: MCP_DOMAIN is not set in .env" >&2
   echo "  Example: MCP_DOMAIN=mcp.yourdomain.com" >&2
   exit 1
 fi
+echo "[ok] MCP_DOMAIN=${DOMAIN}"
 
-# Auto-update OAUTH_BASE_URL in .env from MCP_DOMAIN if empty
+# --- Step 3: Validate Docker is installed ---
+if ! command -v docker &>/dev/null; then
+  echo "FAILED: Docker is not installed." >&2
+  echo "  Install: sudo apt-get install -y docker.io docker-compose-plugin" >&2
+  exit 1
+fi
+if ! docker compose version &>/dev/null; then
+  echo "FAILED: Docker Compose is not available." >&2
+  echo "  Install: sudo apt-get install -y docker-compose-plugin" >&2
+  exit 1
+fi
+echo "[ok] Docker and Docker Compose installed"
+
+# --- Step 4: Auto-populate .env fields ---
+UPDATED_ENV=false
+
 if grep -q "^OAUTH_BASE_URL=$" .env 2>/dev/null; then
   sed -i.bak "s|^OAUTH_BASE_URL=$|OAUTH_BASE_URL=https://${DOMAIN}:8847|" .env && rm -f .env.bak
-  echo "OAUTH_BASE_URL set to https://${DOMAIN}:8847 in .env"
+  echo "[auto] OAUTH_BASE_URL set to https://${DOMAIN}:8847"
+  UPDATED_ENV=true
 fi
 
-# Auto-update MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE in .env if empty
 if grep -q "^MCP_TLS_CERT_FILE=$" .env 2>/dev/null; then
   sed -i.bak "s|^MCP_TLS_CERT_FILE=$|MCP_TLS_CERT_FILE=/certs/fullchain.pem|" .env && rm -f .env.bak
   sed -i.bak "s|^MCP_TLS_KEY_FILE=$|MCP_TLS_KEY_FILE=/certs/privkey.pem|" .env && rm -f .env.bak
-  echo "MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /certs/ paths in .env"
+  echo "[auto] MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /certs/ paths"
+  UPDATED_ENV=true
 fi
 
-# Re-source .env after updates
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-
-if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
-  echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
-fi
-
-# Auto-generate MCP_AUTH_TOKEN if empty
 if grep -q "^MCP_AUTH_TOKEN=$" .env 2>/dev/null; then
   GENERATED_TOKEN=$(openssl rand -hex 32)
   sed -i.bak "s|^MCP_AUTH_TOKEN=$|MCP_AUTH_TOKEN=${GENERATED_TOKEN}|" .env && rm -f .env.bak
-  echo "MCP_AUTH_TOKEN auto-generated and saved to .env"
-  echo "  Token: ${GENERATED_TOKEN}"
-  echo "  Use this token in your Claude Code MCP config."
+  echo "[auto] MCP_AUTH_TOKEN generated: ${GENERATED_TOKEN}"
+  echo "       Save this token — you need it for your Claude Code MCP config."
+  UPDATED_ENV=true
 fi
 
-# Check and generate TLS certificates
+if [ "$UPDATED_ENV" = true ]; then
+  # Re-source .env after updates
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
+if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
+  echo "[note] GEMINI_API_KEY is not set — clients must send X-Gemini-API-Key header"
+fi
+
+# --- Step 5: Check and generate TLS certificates ---
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 if [ ! -d "$CERT_DIR" ]; then
-  echo "" >&2
-  echo "TLS certificates not found at ${CERT_DIR}" >&2
-  echo "" >&2
+  echo ""
+  echo "TLS certificates not found at ${CERT_DIR}"
+  echo ""
 
-  # Check if certbot is installed
+  # Check if certbot is installed, install if not
   if ! command -v certbot &>/dev/null; then
-    echo "certbot is not installed. Installing..." >&2
+    echo "Installing certbot..."
     if command -v apt-get &>/dev/null; then
       sudo apt-get update -qq && sudo apt-get install -y -qq certbot
     elif command -v yum &>/dev/null; then
@@ -86,37 +114,74 @@ if [ ! -d "$CERT_DIR" ]; then
     elif command -v brew &>/dev/null; then
       brew install certbot
     else
-      echo "ERROR: Cannot install certbot automatically. Install it manually:" >&2
-      echo "  https://certbot.eff.org/instructions" >&2
+      echo "FAILED: Cannot install certbot automatically." >&2
+      echo "  Install manually: https://certbot.eff.org/instructions" >&2
       exit 1
     fi
+    echo "[ok] certbot installed"
   fi
 
-  echo "Generating TLS certificate for ${DOMAIN}..." >&2
-  echo "" >&2
-  echo "Certbot will ask you to create a DNS TXT record." >&2
-  echo "Add it in your domain registrar, wait 1-2 minutes, then press Enter." >&2
-  echo "" >&2
+  echo "Generating TLS certificate for ${DOMAIN}..."
+  echo ""
+  echo "Certbot will ask you to create a DNS TXT record."
+  echo "Add it in your domain registrar, wait 1-2 minutes, then press Enter."
+  echo ""
 
   sudo certbot certonly --manual --preferred-challenges dns -d "${DOMAIN}"
 
   # Verify certs were created
   if [ ! -d "$CERT_DIR" ]; then
-    echo "ERROR: Certificate generation failed. ${CERT_DIR} not found." >&2
+    echo "FAILED: Certificate generation failed. ${CERT_DIR} not found." >&2
     echo "  Fix the issue and re-run this script." >&2
     exit 1
   fi
 
-  echo "" >&2
-  echo "TLS certificates generated successfully at ${CERT_DIR}" >&2
+  echo "[ok] TLS certificates generated at ${CERT_DIR}"
+else
+  echo "[ok] TLS certificates found at ${CERT_DIR}"
 fi
 
+# --- Step 6: Validate cert files exist ---
+FULLCHAIN="${CERT_DIR}/fullchain.pem"
+PRIVKEY="${CERT_DIR}/privkey.pem"
+if [ ! -f "$FULLCHAIN" ]; then
+  echo "FAILED: ${FULLCHAIN} not found." >&2
+  exit 1
+fi
+if [ ! -f "$PRIVKEY" ]; then
+  echo "FAILED: ${PRIVKEY} not found." >&2
+  exit 1
+fi
+echo "[ok] fullchain.pem and privkey.pem exist"
+
+# --- Step 7: Build and start Docker ---
 echo ""
-echo "Building and starting mcp-banana (production mode, 0.0.0.0:8847, domain: ${DOMAIN})..."
+echo "Building and starting mcp-banana (production, 0.0.0.0:8847, ${DOMAIN})..."
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
+# --- Step 8: Wait for health check ---
 echo ""
-echo "Server running at https://${DOMAIN}:8847"
-echo "Health check: curl -k https://${DOMAIN}:8847/healthz"
-echo "Logs: docker compose logs -f"
-echo "Stop: docker compose -f docker-compose.yml -f docker-compose.prod.yml down"
+echo "Waiting for server to become healthy..."
+MAX_RETRIES=15
+RETRY_INTERVAL=2
+for attempt in $(seq 1 $MAX_RETRIES); do
+  if curl -sk "https://${DOMAIN}:8847/healthz" 2>/dev/null | grep -q '"status":"ok"'; then
+    echo "[ok] Server is healthy"
+    break
+  fi
+  if [ "$attempt" -eq "$MAX_RETRIES" ]; then
+    echo "FAILED: Server did not become healthy after $((MAX_RETRIES * RETRY_INTERVAL)) seconds." >&2
+    echo "  Check logs: docker compose -f docker-compose.yml -f docker-compose.prod.yml logs" >&2
+    exit 1
+  fi
+  sleep $RETRY_INTERVAL
+done
+
+# --- Done ---
+echo ""
+echo "=== Deployment successful ==="
+echo ""
+echo "  Server:       https://${DOMAIN}:8847"
+echo "  Health check: curl -k https://${DOMAIN}:8847/healthz"
+echo "  Logs:         docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f"
+echo "  Stop:         docker compose -f docker-compose.yml -f docker-compose.prod.yml down"
