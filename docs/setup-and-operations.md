@@ -210,14 +210,30 @@ systemctl enable docker
 systemctl start docker
 ```
 
-### Step 3: Clone the Repository
+### Step 3: Create a Deploy User (recommended)
+
+Running as root is not recommended. Create a deploy user with Docker access:
 
 ```bash
-git clone https://github.com/reshinto/mcp-banana.git /opt/mcp-banana
+# On the droplet as root:
+adduser deploy
+usermod -aG docker deploy
+```
+
+This user is what the CD workflow uses via SSH. Add your deployment SSH public key to `/home/deploy/.ssh/authorized_keys`.
+
+### Step 4: Clone the Repository
+
+```bash
+# As the deploy user:
+sudo git clone https://github.com/reshinto/mcp-banana.git /opt/mcp-banana
+sudo chown -R deploy:deploy /opt/mcp-banana
 cd /opt/mcp-banana
 ```
 
-### Step 4: Configure Environment
+The CD workflow also handles the initial clone automatically if `/opt/mcp-banana` does not exist. But doing it manually ensures you can verify the setup.
+
+### Step 5: Configure Environment
 
 ```bash
 cp .env.example .env
@@ -231,19 +247,33 @@ GEMINI_API_KEY=AIza...
 MCP_AUTH_TOKEN=<generate with: openssl rand -hex 32>
 ```
 
-### Step 5: Verify Model IDs
+The `.env` file is read by Docker Compose via the `env_file: .env` directive in `docker-compose.yml`. See [How Docker Uses Environment Variables](#how-docker-uses-environment-variables) above for details on how this works.
+
+The `.env` file is NOT tracked by git (listed in `.gitignore`), so `git pull` or `git reset --hard` will never overwrite it.
+
+### Step 6: Verify Model IDs
 
 The model IDs in `internal/gemini/registry.go` must be verified before deploying. The CD pipeline also enforces this with a sentinel check. See [models.md](models.md).
 
-### Step 6: Start the Server
+### Step 7: Build and Start the Server
 
 ```bash
 docker compose up -d --build
 ```
 
-Docker Compose builds the image locally, starts the container, and binds port 8847 to `127.0.0.1` (loopback only). The container restarts automatically unless explicitly stopped.
+What this does:
+1. **`docker compose`** reads `docker-compose.yml` which defines the `mcp-banana` service
+2. **`--build`** triggers a Docker image build using the `Dockerfile`:
+   - Stage 1 (`golang:1.24-alpine`): downloads Go dependencies, compiles the binary
+   - Stage 2 (`gcr.io/distroless/static-debian12:nonroot`): copies only the compiled binary into a minimal image
+3. **`-d`** runs the container in detached mode (background)
+4. The container starts with `CMD ["--transport", "http", "--addr", "0.0.0.0:8847"]`
+5. Docker Compose maps host port `127.0.0.1:8847` to container port `8847` (localhost only)
+6. Docker Compose injects all variables from `.env` into the container environment via `env_file: .env`
 
-### Step 7: Verify Health
+The container restarts automatically on failure (`restart: unless-stopped`) with a 120-second graceful shutdown period (`stop_grace_period: 120s`) and a 768 MB memory limit (`mem_limit: 768m`).
+
+### Step 8: Verify Health
 
 ```bash
 curl http://localhost:8847/healthz
@@ -251,7 +281,22 @@ curl http://localhost:8847/healthz
 
 Expected response: `{"status":"ok"}`
 
-The container also runs an internal health check every 30 seconds using `mcp-banana --healthcheck`. If 3 consecutive health checks fail, Docker marks the container unhealthy.
+The container also runs an internal health check every 30 seconds using `mcp-banana --healthcheck`. If 3 consecutive health checks fail, Docker marks the container unhealthy. Check container status:
+
+```bash
+docker compose ps
+```
+
+If the container shows as `unhealthy`, check logs:
+
+```bash
+docker compose logs mcp-banana
+```
+
+Common startup failures:
+- `GEMINI_API_KEY is required` -- `.env` is missing or `GEMINI_API_KEY` is empty
+- `model registry validation failed` -- sentinel IDs not replaced (see Step 6)
+- `MCP_AUTH_TOKEN is required for HTTP transport mode` -- `MCP_AUTH_TOKEN` not set in `.env`
 
 ## CI/CD Pipeline
 
