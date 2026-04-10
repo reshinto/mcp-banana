@@ -80,6 +80,59 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
+## Option C: Claude Desktop GUI (OAuth)
+
+OAuth 2.1 lets users connect Claude Desktop to a remote mcp-banana server through a browser-based sign-in flow. No manual token distribution is needed.
+
+**Prerequisites:**
+
+- A public subdomain (e.g., `banana.yourdomain.com`) with an A record pointing to your server's IP
+- A TLS certificate for that subdomain (see [setup-and-operations.md](setup-and-operations.md) for `certbot` instructions)
+- OAuth credentials from at least one provider (Google, GitHub, or Apple) — see [authentication.md](authentication.md) for provider registration steps
+- `OAUTH_BASE_URL`, provider credentials, `MCP_TLS_CERT_FILE`, and `MCP_TLS_KEY_FILE` set in `.env`
+
+**Setup:**
+
+1. Configure OAuth and TLS in `.env` on your server:
+
+```bash
+OAUTH_BASE_URL=https://banana.yourdomain.com:8847
+OAUTH_GOOGLE_CLIENT_ID=<your-client-id>
+OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
+MCP_TLS_CERT_FILE=/certs/fullchain.pem
+MCP_TLS_KEY_FILE=/certs/privkey.pem
+```
+
+2. Uncomment the `volumes` block in `docker-compose.yml` to mount your TLS certificates:
+
+```yaml
+volumes:
+  - /etc/letsencrypt/live/banana.yourdomain.com:/certs:ro
+```
+
+3. Restart the server:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+4. Verify the HTTPS endpoint is reachable:
+
+```bash
+curl https://banana.yourdomain.com:8847/healthz
+# Expected: {"status":"ok"}
+```
+
+5. In Claude Desktop, open **Customize > Connectors** and add the server URL:
+
+```
+https://banana.yourdomain.com:8847/mcp
+```
+
+6. Claude Desktop opens the OAuth login page. Click your provider and complete the sign-in flow.
+
+After sign-in, Claude Desktop stores the OAuth tokens and handles token refresh automatically. You can start using the image generation tools immediately.
+
 ## Verification
 
 After adding the server:

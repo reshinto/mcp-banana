@@ -83,6 +83,102 @@ The `.env` file is listed in `.gitignore` and must never be committed.
 
 See [authentication.md](authentication.md) for how `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` work.
 
+## OAuth and TLS Setup
+
+This section covers the additional configuration required for OAuth 2.1 support (Claude Desktop integration). Skip this section if you are using bearer token authentication only.
+
+### Subdomain DNS Setup
+
+OAuth requires HTTPS, which requires a public domain name. Create an A record pointing your subdomain to your server's IP address:
+
+| Type | Name | Value |
+|---|---|---|
+| A | `banana` | `<your-droplet-ip>` |
+
+This makes `banana.yourdomain.com` resolve to your server. DNS propagation typically takes a few minutes to a few hours.
+
+Verify propagation:
+
+```bash
+dig banana.yourdomain.com
+# Should return your droplet's IP address
+```
+
+### TLS Certificate Generation
+
+Use `certbot` to obtain a free Let's Encrypt certificate. The `--manual --preferred-challenges dns` method works without running a web server:
+
+```bash
+certbot certonly --manual --preferred-challenges dns -d banana.yourdomain.com
+```
+
+`certbot` prompts you to add a `_acme-challenge` DNS TXT record to prove domain ownership. Add the record in your DNS provider, wait for propagation, then press Enter. The certificate files are written to `/etc/letsencrypt/live/banana.yourdomain.com/`.
+
+Renew the certificate before it expires (Let's Encrypt certificates are valid for 90 days):
+
+```bash
+certbot renew --manual --preferred-challenges dns
+```
+
+### OAuth Provider Credential Setup
+
+Register your server as an OAuth application with each provider you want to support.
+
+**Google** — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+
+Create an OAuth 2.0 Client ID. Set the authorized redirect URI to:
+`https://banana.yourdomain.com:8847/oauth/callback/google`
+
+**GitHub** — [github.com/settings/developers](https://github.com/settings/developers)
+
+Create a new OAuth App. Set the authorization callback URL to:
+`https://banana.yourdomain.com:8847/oauth/callback/github`
+
+**Apple** — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
+
+Register a Services ID. Set the return URL to:
+`https://banana.yourdomain.com:8847/oauth/callback/apple`
+
+Add the credentials to `.env`:
+
+```bash
+OAUTH_BASE_URL=https://banana.yourdomain.com:8847
+
+OAUTH_GOOGLE_CLIENT_ID=<your-client-id>
+OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
+
+OAUTH_GITHUB_CLIENT_ID=<your-client-id>
+OAUTH_GITHUB_CLIENT_SECRET=<your-client-secret>
+```
+
+Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the OAuth login page. You do not need to configure all providers.
+
+### Docker Volume Mount for Certificates
+
+Mount the Let's Encrypt certificate directory into the container by uncommenting the `volumes` block in `docker-compose.yml`:
+
+```yaml
+services:
+  mcp-banana:
+    env_file:
+      - .env
+    volumes:
+      - /etc/letsencrypt/live/banana.yourdomain.com:/certs:ro
+```
+
+Then set the certificate paths in `.env`:
+
+```bash
+MCP_TLS_CERT_FILE=/certs/fullchain.pem
+MCP_TLS_KEY_FILE=/certs/privkey.pem
+```
+
+The `:ro` mount flag makes the certificate files read-only inside the container. Restart the container after updating `docker-compose.yml`:
+
+```bash
+docker compose up -d --force-recreate
+```
+
 ## Production Deployment (Docker)
 
 **Step 1: Provision a server**

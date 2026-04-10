@@ -9,6 +9,7 @@ Authentication in HTTP mode is optional. Three approaches are available dependin
 | **SSH tunnel only** (no token) | Server reachable only via SSH tunnel | Nothing -- auth is skipped |
 | **Single shared token** | Solo developer or small trusted team | `MCP_AUTH_TOKEN` in `.env` |
 | **Per-user tokens file** | Multiple users, individual revocation | `MCP_AUTH_TOKENS_FILE` in `.env` |
+| **OAuth 2.1** | Claude Desktop GUI integration | `OAUTH_BASE_URL` + provider credentials in `.env` |
 
 If neither `MCP_AUTH_TOKEN` nor `MCP_AUTH_TOKENS_FILE` is set, the server logs a warning and runs without bearer token auth. This is safe when all access goes through an SSH tunnel.
 
@@ -219,3 +220,86 @@ grep -v '^#' /opt/mcp-banana/tokens.txt | grep -v '^$'
 # Count active tokens
 grep -cv '^#\|^$' /opt/mcp-banana/tokens.txt
 ```
+
+---
+
+## Option C: OAuth (Claude Desktop)
+
+OAuth 2.1 enables Claude Desktop users to authenticate via a browser sign-in flow instead of manually configuring a bearer token. The server acts as an OAuth authorization server, delegating identity verification to a third-party provider (Google, GitHub, or Apple).
+
+### How It Differs from Bearer Token Auth
+
+| Aspect | Bearer Token | OAuth 2.1 |
+|---|---|---|
+| Client | Claude Code CLI | Claude Desktop GUI |
+| Credential management | Manual token distribution | Browser-based sign-in |
+| Transport | HTTP or SSH tunnel | HTTPS only |
+| Token lifetime | Until rotated | 1 hour (access), 30 days (refresh) |
+| PKCE required | No | Yes |
+
+### Prerequisites
+
+- A public subdomain (e.g., `banana.yourdomain.com`) pointing to your server
+- A TLS certificate for that subdomain (see [setup-and-operations.md](setup-and-operations.md) for `certbot` instructions)
+- OAuth credentials from at least one provider
+
+### Provider Setup
+
+**Google**
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and create an OAuth 2.0 Client ID.
+2. Set the authorized redirect URI to: `https://banana.yourdomain.com:8847/oauth/callback/google`
+3. Copy the client ID and secret into `.env`:
+
+```
+OAUTH_GOOGLE_CLIENT_ID=<your-client-id>
+OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
+```
+
+**GitHub**
+
+1. Go to [GitHub Developer Settings](https://github.com/settings/developers) and create a new OAuth App.
+2. Set the authorization callback URL to: `https://banana.yourdomain.com:8847/oauth/callback/github`
+3. Copy the client ID and secret into `.env`:
+
+```
+OAUTH_GITHUB_CLIENT_ID=<your-client-id>
+OAUTH_GITHUB_CLIENT_SECRET=<your-client-secret>
+```
+
+**Apple**
+
+1. Go to [Apple Developer — Identifiers](https://developer.apple.com/account/resources/identifiers) and register a Services ID.
+2. Set the return URL to: `https://banana.yourdomain.com:8847/oauth/callback/apple`
+3. Copy the client ID and secret into `.env`:
+
+```
+OAUTH_APPLE_CLIENT_ID=<your-services-id>
+OAUTH_APPLE_CLIENT_SECRET=<your-secret-key>
+```
+
+### Server Configuration
+
+Set `OAUTH_BASE_URL` to the public HTTPS base URL of your server (no trailing slash):
+
+```
+OAUTH_BASE_URL=https://banana.yourdomain.com:8847
+```
+
+Mount the TLS certificate and key files, and point the server at them:
+
+```
+MCP_TLS_CERT_FILE=/certs/fullchain.pem
+MCP_TLS_KEY_FILE=/certs/privkey.pem
+```
+
+Restart the server. The OAuth login page is served at `https://banana.yourdomain.com:8847/oauth/login`. Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the login page.
+
+### OAuth Flow
+
+1. Claude Desktop opens the login page.
+2. The user clicks a provider button. The server redirects to the provider's authorization endpoint with a PKCE code challenge and a `state` parameter.
+3. The provider authenticates the user and redirects back to `/oauth/callback/<provider>` with an authorization code.
+4. The server exchanges the code for provider tokens, issues its own short-lived access token and long-lived refresh token, and returns them to Claude Desktop.
+5. Claude Desktop includes the access token in every subsequent MCP request as `Authorization: Bearer <access-token>`.
+6. When the access token expires (1 hour), Claude Desktop uses the refresh token to obtain a new one without requiring the user to sign in again.

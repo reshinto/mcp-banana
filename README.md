@@ -8,7 +8,7 @@ A Go MCP server that gives Claude Code access to Google's Gemini image generatio
 
 ## Overview
 
-mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
+mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token or OAuth 2.1 authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
 
 ![Architecture](docs/diagrams/high-level-architecture.png)
 
@@ -55,6 +55,20 @@ Ask Claude Code:
 > "Generate an image of a cute cat sitting on a cozy blanket"
 
 See [Claude Code Integration](docs/claude-code-integration.md) for full setup instructions including stdio mode, SSH tunnels, and troubleshooting.
+
+## Claude Desktop Integration
+
+mcp-banana supports OAuth 2.1 for connecting via Claude Desktop GUI.
+
+**Prerequisites:** A subdomain (e.g., `banana.yourdomain.com`) with a TLS certificate, and OAuth credentials from at least one provider (Google, GitHub, or Apple).
+
+1. Configure OAuth provider credentials and TLS in `.env`
+2. Start the server: `docker compose up -d`
+3. In Claude Desktop, go to **Customize > Connectors**
+4. Add your server URL: `https://banana.yourdomain.com:8847/mcp`
+5. Sign in with your chosen provider when prompted
+
+See [Claude Code Integration](docs/claude-code-integration.md) for detailed setup.
 
 ## Documentation
 

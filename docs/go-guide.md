@@ -438,7 +438,106 @@ The race detector is enabled with `-race`:
 go test -coverprofile=coverage.out -race ./... -v
 ```
 
-## 16. Go Glossary
+## 16. OAuth Implementation Concepts
+
+This section explains the Go standard library features used in the OAuth 2.1 implementation.
+
+### `embed` — Embedding Static Files into the Binary
+
+The `embed` package lets you bundle files (such as the OAuth login page `login.html`) directly into the compiled binary. This means the server does not need to read files from disk at runtime.
+
+```go
+import _ "embed"
+
+//go:embed login.html
+var loginHTML []byte
+```
+
+The `//go:embed` directive is a build-time instruction. At compile time, Go reads `login.html` from the filesystem and stores its contents in `loginHTML`. The deployed binary contains the HTML — no separate file deployment required.
+
+### `crypto/rand` — Cryptographically Secure Random Numbers
+
+`math/rand` generates pseudorandom numbers from a deterministic seed — unsuitable for security tokens. `crypto/rand` reads from the operating system's entropy source (e.g., `/dev/urandom` on Linux) and is safe for generating unpredictable values such as OAuth `state` parameters and authorization codes.
+
+```go
+import "crypto/rand"
+
+// Generate 32 random bytes and encode as hex
+tokenBytes := make([]byte, 32)
+if _, err := crypto/rand.Read(tokenBytes); err != nil {
+    return "", fmt.Errorf("failed to generate token: %w", err)
+}
+token := hex.EncodeToString(tokenBytes)
+```
+
+`crypto/rand.Read` fills the slice with random bytes. It returns an error only if the OS entropy source is unavailable, which is rare but must be handled.
+
+### `sync.RWMutex` — Reader-Writer Mutual Exclusion
+
+The OAuth token store holds active tokens in a map that multiple goroutines read and write concurrently. `sync.RWMutex` allows many concurrent readers or exactly one exclusive writer, which is more efficient than a plain `sync.Mutex` for read-heavy workloads.
+
+```go
+// internal/oauth/store.go
+type TokenStore struct {
+    tokensMutex sync.RWMutex
+    tokens      map[string]*Token
+}
+
+func (store *TokenStore) Get(tokenID string) (*Token, bool) {
+    store.tokensMutex.RLock()         // shared read lock — multiple readers OK
+    defer store.tokensMutex.RUnlock()
+    token, found := store.tokens[tokenID]
+    return token, found
+}
+
+func (store *TokenStore) Put(tokenID string, token *Token) {
+    store.tokensMutex.Lock()          // exclusive write lock — blocks all readers
+    defer store.tokensMutex.Unlock()
+    store.tokens[tokenID] = token
+}
+```
+
+This is the same pattern used by `internal/security/sanitize.go` for the registered-secrets slice (see section 10).
+
+### `net/http` `ListenAndServeTLS` — Built-in TLS Support
+
+The standard library's `http.Server` supports TLS natively. When `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` are set, the server calls `ListenAndServeTLS` instead of `ListenAndServe`:
+
+```go
+// cmd/mcp-banana/main.go
+if serverConfig.TLSCertFile != "" && serverConfig.TLSKeyFile != "" {
+    startError = httpServer.ListenAndServeTLS(serverConfig.TLSCertFile, serverConfig.TLSKeyFile)
+} else {
+    startError = httpServer.ListenAndServe()
+}
+```
+
+`ListenAndServeTLS` loads the certificate and key from disk, performs the TLS handshake for each incoming connection, and then handles the HTTP protocol as usual. The rest of the application (middleware, handlers, MCP dispatch) is identical for HTTPS and plain HTTP.
+
+### `html/template` — Server-Side HTML Rendering
+
+The OAuth login page is generated server-side using Go's `html/template` package. Unlike `text/template`, `html/template` automatically escapes values inserted into HTML to prevent cross-site scripting (XSS).
+
+```go
+import "html/template"
+
+var loginPageTemplate = template.Must(template.New("login").Parse(string(loginHTML)))
+
+func (handler *OAuthHandler) serveLoginPage(writer http.ResponseWriter, req *http.Request) {
+    data := struct {
+        Providers []string
+        CSRFToken string
+    }{
+        Providers: handler.enabledProviders(),
+        CSRFToken: generateStateToken(),
+    }
+    loginPageTemplate.Execute(writer, data)
+}
+```
+
+`template.Must` panics if the template fails to parse, catching template syntax errors at startup rather than at request time. Values inserted via `{{ .CSRFToken }}` are HTML-escaped automatically — an attacker cannot inject script tags through provider names or state values.
+
+## 17. Go Glossary
 
 | Abbreviation | Meaning | Explanation |
 |---|---|---|

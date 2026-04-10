@@ -123,3 +123,36 @@ No other error text may reach Claude Code.
 | Error mapping | Gemini client and tool handlers | Fixed allowlist |
 | Panic recovery | HTTP middleware | Always active |
 | Registry sentinel check | Startup, `ValidateRegistryAtStartup()` | Blocks boot if triggered |
+| PKCE enforcement | OAuth handler, every authorization request | Fixed; rejects requests without code challenge |
+| OAuth state parameter | OAuth handler, per-request CSRF token | Generated via `crypto/rand`, verified on callback |
+| Redirect URI validation | OAuth handler, callback stage | Fixed allowlist; rejects unregistered URIs |
+| OAuth token TTL | Token store | Auth code: 10 min; access token: 1 hr; refresh token: 30 days |
+| Provider secret sanitization | Startup secret registration | `OAUTH_*_CLIENT_SECRET` values registered with sanitizer |
+
+## OAuth Security
+
+### PKCE Requirement
+
+Every OAuth authorization request must include a PKCE (`code_challenge` + `code_challenge_method=S256`) parameter. The server rejects authorization requests without a valid code challenge. PKCE prevents authorization code interception attacks, which are particularly relevant for public clients like Claude Desktop.
+
+### Token TTLs
+
+| Token type | Lifetime | Notes |
+|---|---|---|
+| Authorization code | 10 minutes | Single-use; invalidated immediately after exchange |
+| Access token | 1 hour | Included in every MCP request as a bearer token |
+| Refresh token | 30 days | Used to obtain a new access token without re-authentication |
+
+Short-lived access tokens limit the window of exposure if a token is intercepted.
+
+### State Parameter (CSRF Protection)
+
+The server generates a cryptographically random `state` parameter for each authorization request using `crypto/rand`. The callback handler verifies that the returned `state` matches the one issued for that session. Requests with a missing or mismatched `state` are rejected with 400. This prevents cross-site request forgery attacks on the OAuth callback endpoint.
+
+### Redirect URI Validation
+
+The server maintains a fixed allowlist of permitted redirect URIs derived from `OAUTH_BASE_URL`. Any callback request whose `redirect_uri` does not match the allowlist is rejected before the authorization code is exchanged. This prevents open redirect attacks.
+
+### Provider Secret Sanitization
+
+All `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret()` at startup. This ensures they are redacted from logs and error messages through the same mechanism used for `GEMINI_API_KEY` and `MCP_AUTH_TOKEN`.

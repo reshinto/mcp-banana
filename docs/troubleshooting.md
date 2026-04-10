@@ -15,6 +15,10 @@
 | `docker compose` not recognized | `unknown shorthand flag: 'd' in -d` | Docker < 20.10 does not include the Compose V2 plugin | Use `docker-compose` (hyphenated) instead, or upgrade Docker to 20.10+ |
 | golangci-lint not installed | `golangci-lint: command not found` | Tool not in PATH | `go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.4` |
 | Rate limit hit | `{"error":"rate_limited"}` (HTTP 429) | Exceeded `MCP_RATE_LIMIT` requests per minute | Wait for the bucket to refill, or increase `MCP_RATE_LIMIT` in `.env` |
+| OAuth login page shows no providers | Login page renders but no sign-in buttons appear | `OAUTH_*_CLIENT_ID` or `OAUTH_*_CLIENT_SECRET` not set for any provider | Set both `CLIENT_ID` and `CLIENT_SECRET` for at least one provider in `.env` and restart |
+| TLS handshake failed | `tls: failed to find any PEM data` or similar | `MCP_TLS_CERT_FILE` or `MCP_TLS_KEY_FILE` path is wrong, or the cert does not match the domain | Verify the paths exist inside the container (`docker compose exec mcp-banana ls /certs`), and confirm the cert's CN/SAN matches your domain |
+| 401 after OAuth login | Requests return 401 immediately after sign-in | OAuth access token has expired (1 hour TTL) | Re-authenticate via the Claude Desktop connector flow to obtain a fresh token |
+| Claude Desktop can't connect | Connection fails or times out in Claude Desktop | Server is not reachable over HTTPS, or `OAUTH_BASE_URL` does not match the actual domain and port | Verify the server is running with TLS (`curl https://banana.yourdomain.com:8847/healthz`), and ensure `OAUTH_BASE_URL` in `.env` exactly matches the URL used in Claude Desktop |
 
 ## How to Debug
 

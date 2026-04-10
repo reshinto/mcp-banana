@@ -21,6 +21,7 @@ The server is organized around a security-first principle: secrets never cross t
 | `internal/server/` | HTTP routing, middleware chain, health check | `NewMCPServer()`, `NewHTTPHandler()`, `WrapWithMiddleware()` |
 | `internal/tools/` | MCP tool handler factories | `NewGenerateImageHandler()`, `NewEditImageHandler()`, `NewListModelsHandler()`, `NewRecommendModelHandler()` |
 | `internal/policy/` | Model recommendation logic | `Recommend()`, `Recommendation` |
+| `internal/oauth/` | OAuth 2.1 authorization (PKCE, token store, provider delegation, dynamic client registration) | `Handler`, `TokenStore`, `Provider` |
 
 ## Package Dependencies
 

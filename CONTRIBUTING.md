@@ -63,6 +63,19 @@ Use `fmt.Errorf("context: %w", err)` to wrap errors with context while preservin
 - Always validate user input through the `security` package before forwarding to the Gemini client.
 - Map all Gemini errors through `gemini.MapError()` -- never forward raw error text.
 
+## OAuth Development Setup
+
+OAuth requires real credentials from Google, GitHub, or Apple for end-to-end testing. For local development that does not involve OAuth, use bearer token authentication instead — bearer tokens work without a domain, TLS certificate, or provider credentials.
+
+If you need to test the OAuth flow locally:
+
+1. Register a test application with at least one provider (see [authentication.md](authentication.md) for provider links).
+2. For the redirect URI, most providers allow `localhost` callbacks — set it to `http://localhost:8847/oauth/callback/<provider>`.
+3. Set `OAUTH_BASE_URL=http://localhost:8847` in your local `.env`. TLS is not required for `localhost`.
+4. Run the server with `make run-http` and navigate to `http://localhost:8847/oauth/login` to test the flow.
+
+Do not commit provider credentials. Keep them in your local `.env`, which is listed in `.gitignore`.
+
 ## Branch Workflow
 
 Every task starts on a new branch:
