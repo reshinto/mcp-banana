@@ -51,7 +51,7 @@ The build flags `-ldflags="-s -w"` strip the symbol table and debug info, reduci
 
 Two-stage Docker build targeting Linux/amd64:
 
-**Stage 1 (builder):** Uses `golang:1.24-alpine`. Copies `go.mod` and `go.sum` first (before source code) to maximize layer cache reuse. Builds with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64` and the same optimization flags as `make build`.
+**Stage 1 (builder):** Uses `golang:1.25-alpine`. Copies `go.mod` and `go.sum` first (before source code) to maximize layer cache reuse. Builds with `CGO_ENABLED=0 GOOS=linux GOARCH=amd64` and the same optimization flags as `make build`.
 
 **Stage 2 (runtime):** Uses `gcr.io/distroless/static-debian12:nonroot`. This image contains only a minimal Linux base with no shell, no package manager, and no writable filesystem except `/tmp`. The binary is copied from the builder stage. The container runs as `nonroot` (UID 65532), not root.
 
