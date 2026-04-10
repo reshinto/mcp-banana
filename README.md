@@ -313,6 +313,129 @@ make rotate-token
 
 This generates a new token and prints instructions for updating both the server and your Claude Code configuration.
 
+## CI/CD Pipeline
+
+The project uses GitHub Actions for continuous integration and continuous deployment.
+
+### Continuous Integration
+
+CI runs automatically on:
+- **Pushes to feature/fix/chore branches** — validates code quality, tests, and formatting before review
+- **Pull requests to main** — ensures quality gates pass before merge
+- **Pushes to main** — CD workflow invokes CI before deploying to production
+
+The CI sequence runs in this order and must pass completely:
+1. `golangci-lint run` — code linting
+2. `gofmt -w .` — code formatting
+3. `go vet ./...` — static analysis
+4. `go test ./...` — unit and integration tests
+
+### Continuous Deployment
+
+CD runs automatically on **pushes to main** and:
+1. **Builds and publishes a Docker image** to the container registry
+2. **Deploys to DigitalOcean** with the new image
+3. **Runs smoke tests** against the deployed server to validate basic functionality
+4. **Auto-rollback** if post-deploy health checks fail; manual intervention required only if rollback also fails
+
+### Secrets Management
+
+**Deployment secrets** (Docker registry credentials, DigitalOcean API tokens, deployment keys) are stored as **GitHub environment secrets**, not in code or configuration files. Only the `.env.example` template is committed to the repository.
+
+**Application runtime secrets** (Gemini API key, MCP auth token) live only on the server in the `.env` file. They are never stored in GitHub or version control. See the [Deployment](#deployment) section for setup instructions.
+
+### Rollback Policy
+
+- **Automatic rollback:** If post-deploy health checks detect the new deployment is unhealthy, the system automatically rolls back to the previous version.
+- **Manual rollback:** If automatic rollback fails, manual intervention is required. Contact the DevOps team or re-run the deployment workflow with the previous image tag.
+
+## Using with Claude Code
+
+mcp-banana can be integrated with Claude Code as a local or remote MCP server. Choose the setup that fits your team's workflow.
+
+### Team Adoption Recommendation
+
+| Scope | Use case | How |
+|---|---|---|
+| **User scope** (`--scope user`) | Personal local development | `claude mcp add --scope user ...` (stored in `~/.claude.json`) |
+| **Project scope** (`--scope project`) | Shared team configuration | `claude mcp add --scope project ...` (stored in `.mcp.json`) |
+| **HTTP** | Preferred remote transport | Direct HTTP or SSH-tunneled HTTP |
+| **SSE** | Deprecated | Do not use |
+
+### Option A: Local stdio Mode (Recommended for Development)
+
+**Prerequisites:**
+- Build the binary: `make build`
+- Get a Google Gemini API key from [ai.google.dev](https://ai.google.dev)
+
+**User-scoped setup** (secrets stored locally):
+```bash
+claude mcp add-json --scope user banana '{
+  "command": "/usr/local/bin/mcp-banana",
+  "args": ["--transport", "stdio"],
+  "env": {
+    "GEMINI_API_KEY": "<your-gemini-api-key>"
+  },
+  "type": "stdio"
+}'
+```
+
+**Project-scoped setup** (committed to repo, secret-free):
+```bash
+claude mcp add-json --scope project banana '{
+  "command": "${MCP_BANANA_BIN:-mcp-banana}",
+  "args": ["--transport", "stdio"],
+  "type": "stdio"
+}'
+```
+
+**Note:** The project-scoped config contains no secrets. Each developer supplies their own `GEMINI_API_KEY` via user-scoped config or environment variable.
+
+The `.mcp.json` file is already committed to this repository with the project-scoped configuration above.
+
+### Option B: Remote HTTP Mode (For Deployed Server)
+
+Connect to a remotely deployed instance:
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://localhost:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>"
+  }
+}'
+```
+
+**Optional SSH tunnel hardening:**
+```bash
+ssh -N -L 8847:127.0.0.1:8847 user@<droplet-ip>
+```
+
+Then update the URL to `http://localhost:8847/mcp` in the config above.
+
+### Verification
+
+After adding the server:
+```bash
+claude mcp list
+claude mcp get banana
+```
+
+Both commands should show the banana server configuration.
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `claude mcp list` does not show banana | Server not added | Re-run `claude mcp add-json` with correct scope |
+| "GEMINI_API_KEY is required" | API key not set | Add `env` block to user-scoped config or set environment variable |
+| "model registry validation failed" | Sentinel IDs present | Replace `VERIFY_MODEL_ID_BEFORE_RELEASE` in `internal/gemini/registry.go` with verified Gemini model IDs |
+| HTTP "unauthorized" (401) | Wrong or missing auth token | Verify `MCP_AUTH_TOKEN` matches the token in server `.env` |
+| "Connection refused" | SSH tunnel not running or server down | Start SSH tunnel or verify remote server is healthy with `curl http://localhost:8847/healthz` |
+
+**Pre-release note:** The server refuses to start with sentinel model IDs in the registry. This is intentional to prevent accidental deployment with unverified IDs. See the [Model ID Verification Status](#model-id-verification-status) section for details.
+
 ## Go Glossary
 
 For contributors unfamiliar with Go, here are common abbreviations used in this codebase:
