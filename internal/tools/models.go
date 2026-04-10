@@ -14,10 +14,7 @@ import (
 func NewListModelsHandler() func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		models := gemini.AllModelsSafe()
-		jsonBytes, marshalErr := json.Marshal(models)
-		if marshalErr != nil {
-			return mcp.NewToolResultError("server_error: internal error"), nil
-		}
+		jsonBytes, _ := json.Marshal(models)
 		return mcp.NewToolResultText(string(jsonBytes)), nil
 	}
 }

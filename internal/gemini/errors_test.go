@@ -87,6 +87,86 @@ func TestMapError_ServerError(test *testing.T) {
 	}
 }
 
+// apiErrorWrapper wraps a genai.APIError value (not pointer) for testing the value-receiver
+// unwrap path in MapError. errors.As will match this as genai.APIError (value), not *genai.APIError.
+type apiErrorWrapper struct {
+	inner genai.APIError
+}
+
+func (wrapper apiErrorWrapper) Error() string {
+	return wrapper.inner.Error()
+}
+
+func (wrapper apiErrorWrapper) Unwrap() error {
+	return wrapper.inner
+}
+
+func TestMapError_APIErrorValue(test *testing.T) {
+	// Wrap a genai.APIError value (not pointer) — this exercises the value unwrap path (errors.go line 60-64).
+	wrappedError := apiErrorWrapper{inner: genai.APIError{Code: 404, Message: "model gone"}}
+	code, message := gemini.MapError(wrappedError)
+	if code != "model_unavailable" {
+		test.Errorf("expected model_unavailable for 404 via value unwrap, got %q", code)
+	}
+	if message == "" {
+		test.Error("expected non-empty message")
+	}
+}
+
+func TestMapError_UnknownHTTPStatus(test *testing.T) {
+	// Status 301 is not 400/403/404/429/5xx — exercises mapHTTPStatus default case.
+	apiError := &genai.APIError{Code: 301, Message: "redirect"}
+	code, _ := gemini.MapError(apiError)
+	if code != "generation_failed" {
+		test.Errorf("expected generation_failed for unknown status 301, got %q", code)
+	}
+}
+
+func TestMapError_SafetyBlocked(test *testing.T) {
+	code, message := gemini.MapError(errors.New("request blocked by safety filter"))
+	if code != "content_policy_violation" {
+		test.Errorf("expected content_policy_violation for 'safety' substring, got %q", code)
+	}
+	if message == "" {
+		test.Error("expected non-empty message")
+	}
+}
+
+func TestMapError_QuotaExceeded(test *testing.T) {
+	code, _ := gemini.MapError(errors.New("you have exceeded your quota"))
+	if code != "quota_exceeded" {
+		test.Errorf("expected quota_exceeded for 'quota' substring, got %q", code)
+	}
+}
+
+func TestMapError_RateLimited(test *testing.T) {
+	code, _ := gemini.MapError(errors.New("rate limit exceeded for this API"))
+	if code != "quota_exceeded" {
+		test.Errorf("expected quota_exceeded for 'rate' substring, got %q", code)
+	}
+}
+
+func TestMapError_ModelNotFound(test *testing.T) {
+	code, _ := gemini.MapError(errors.New("model not found in catalog"))
+	if code != "model_unavailable" {
+		test.Errorf("expected model_unavailable for 'not found' substring, got %q", code)
+	}
+}
+
+func TestMapError_ModelDeprecated(test *testing.T) {
+	code, _ := gemini.MapError(errors.New("this model is deprecated"))
+	if code != "model_unavailable" {
+		test.Errorf("expected model_unavailable for 'deprecated' substring, got %q", code)
+	}
+}
+
+func TestMapError_BlockedSubstring(test *testing.T) {
+	code, _ := gemini.MapError(errors.New("request was blocked by the API"))
+	if code != "content_policy_violation" {
+		test.Errorf("expected content_policy_violation for 'blocked' substring, got %q", code)
+	}
+}
+
 func containsSubstring(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && searchSubstring(haystack, needle)
 }

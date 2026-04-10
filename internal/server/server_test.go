@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reshinto/mcp-banana/internal/config"
 	"github.com/reshinto/mcp-banana/internal/gemini"
@@ -313,6 +314,129 @@ func TestOversizedBodyRejected(test *testing.T) {
 		test.Fatalf("expected 413, got %d", rec.Code)
 	}
 	assertJSONError(test, rec.Body.String(), "request_too_large")
+}
+
+// --- Middleware: empty bearer token ---
+
+func TestMiddlewareEmptyBearerToken(test *testing.T) {
+	handler := buildHandler(defaultTestConfig())
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for empty bearer token, got %d", rec.Code)
+	}
+	assertJSONError(test, rec.Body.String(), "unauthorized")
+}
+
+// --- Middleware: concurrency timeout ---
+
+func TestMiddlewareConcurrencyTimeout(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         1000,
+		GlobalConcurrency: 1, // single slot
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+
+	// Create a handler that blocks until released.
+	blockChan := make(chan struct{})
+	blockingHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		<-blockChan
+	})
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), blockingHandler)
+
+	// First request takes the only concurrency slot and blocks.
+	go func() {
+		firstReq := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+		firstRec := httptest.NewRecorder()
+		wrappedHandler.ServeHTTP(firstRec, firstReq)
+	}()
+
+	// Give the goroutine time to acquire the semaphore slot.
+	time.Sleep(50 * time.Millisecond)
+
+	// Second request should time out waiting for the semaphore.
+	secondReq := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	secondRec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(secondRec, secondReq)
+
+	close(blockChan) // release the blocking handler
+
+	if secondRec.Code != http.StatusServiceUnavailable {
+		test.Fatalf("expected 503 for concurrency timeout, got %d", secondRec.Code)
+	}
+	assertJSONError(test, secondRec.Body.String(), "server_busy")
+}
+
+// --- Middleware: non-MaxBytesError read failure ---
+
+// errorReader is an io.ReadCloser that always returns an error on Read.
+type errorReader struct{}
+
+func (errorReader) Read(_ []byte) (int, error) {
+	return 0, fmt.Errorf("simulated I/O error")
+}
+
+func (errorReader) Close() error {
+	return nil
+}
+
+func TestMiddlewareNonMaxBytesReadError(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         1000,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+
+	noopHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), noopHandler)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", errorReader{})
+	rec := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		test.Fatalf("expected 400 for read error, got %d", rec.Code)
+	}
+	assertJSONError(test, rec.Body.String(), "bad_request")
+}
+
+// --- Middleware: Retry-After clamped to 1 ---
+
+func TestMiddlewareRetryAfterClampedToOne(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         120, // 120 per minute = 2/sec, so 1/limit = 0.5 → retryAfterSecs = 0 → clamped to 1
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	handler := buildHandler(cfg)
+
+	// Exhaust the burst (120 requests) then trigger rate limiting
+	for requestIndex := 0; requestIndex < 120; requestIndex++ {
+		exhaustReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+		exhaustRec := httptest.NewRecorder()
+		handler.ServeHTTP(exhaustRec, exhaustReq)
+	}
+
+	// Next request should be rate limited with Retry-After: 1
+	limitedReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	limitedRec := httptest.NewRecorder()
+	handler.ServeHTTP(limitedRec, limitedReq)
+
+	if limitedRec.Code != http.StatusTooManyRequests {
+		test.Fatalf("expected 429, got %d", limitedRec.Code)
+	}
+	retryAfter := limitedRec.Header().Get("Retry-After")
+	if retryAfter != "1" {
+		test.Errorf("expected Retry-After '1', got %q", retryAfter)
+	}
 }
 
 // --- helpers ---

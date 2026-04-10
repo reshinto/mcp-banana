@@ -39,10 +39,7 @@ func NewEditImageHandler(service gemini.GeminiService, maxImageBytes int) func(c
 			return mcp.NewToolResultError(fmt.Sprintf("%s: %s", code, message)), nil
 		}
 
-		jsonBytes, marshalErr := json.Marshal(result)
-		if marshalErr != nil {
-			return mcp.NewToolResultError("server_error: internal error"), nil
-		}
+		jsonBytes, _ := json.Marshal(result)
 		return mcp.NewToolResultText(string(jsonBytes)), nil
 	}
 }
