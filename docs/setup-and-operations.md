@@ -110,77 +110,338 @@ If neither `MCP_AUTH_TOKEN` nor `MCP_AUTH_TOKENS_FILE` is set, the server logs a
 
 ### Option 1: SSH Tunnel Only (No Token)
 
-If every user connects via SSH tunnel:
+This is the simplest and most secure approach. The mcp-banana server listens only on `127.0.0.1:8847` inside the droplet (configured in `docker-compose.yml`). It is never exposed to the public internet. Each user creates an SSH tunnel from their local machine to the droplet, which forwards their local port 8847 to the server's port 8847 inside the droplet.
+
+No bearer token is needed -- the SSH key itself is the authentication. Leave both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty (or remove them) in `.env`.
+
+#### Admin Setup (one-time, on the DigitalOcean droplet)
+
+**Step 1: Create an SSH user account for each team member**
 
 ```bash
-ssh -N -L 8847:127.0.0.1:8847 user@<droplet-ip>
+# SSH to the droplet as root
+ssh root@<droplet-ip>
+
+# Create a user account for Alice
+adduser alice
+# (set a password or skip -- SSH key auth is preferred)
+
+# Create a user account for Bob
+adduser bob
 ```
 
-Then the server port is never exposed publicly. The SSH key is the authentication. No bearer token is needed. Leave `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty in `.env`.
+**Step 2: Add each user's SSH public key**
+
+Each team member generates an SSH key pair on their local machine (if they don't already have one):
+
+```bash
+# On the team member's local machine:
+ssh-keygen -t ed25519 -C "alice@company.com"
+# Accept defaults, or choose a custom path
+# This creates ~/.ssh/id_ed25519 (private) and ~/.ssh/id_ed25519.pub (public)
+```
+
+The team member sends you their **public key** (the `.pub` file). Never share the private key.
+
+On the droplet, add their public key:
+
+```bash
+# As root on the droplet:
+mkdir -p /home/alice/.ssh
+echo "ssh-ed25519 AAAAC3Nza... alice@company.com" >> /home/alice/.ssh/authorized_keys
+chmod 700 /home/alice/.ssh
+chmod 600 /home/alice/.ssh/authorized_keys
+chown -R alice:alice /home/alice/.ssh
+```
+
+Repeat for each team member.
+
+**Step 3: Verify `.env` has no token configured**
+
+```bash
+# On the droplet:
+cat /opt/mcp-banana/.env | grep -E "MCP_AUTH_TOKEN|MCP_AUTH_TOKENS_FILE"
+```
+
+Both should be empty or absent. The server will log a warning at startup saying auth is disabled -- this is expected in SSH-tunnel mode.
+
+#### User Setup (each team member, on their local machine)
+
+**Step 1: Open the SSH tunnel**
+
+```bash
+ssh -N -L 8847:127.0.0.1:8847 alice@<droplet-ip>
+```
+
+What this does:
+- `-N` -- don't open a shell, just forward the port
+- `-L 8847:127.0.0.1:8847` -- forward local port 8847 to the droplet's localhost port 8847
+- `alice@<droplet-ip>` -- authenticate as `alice` using her SSH key
+
+This command blocks (keeps the tunnel open). Open a new terminal for Claude Code.
+
+**Step 2: Keep the tunnel running (optional but recommended)**
+
+The basic `ssh -N` command disconnects if your network drops. Use `autossh` for a persistent tunnel:
+
+```bash
+# Install autossh (macOS)
+brew install autossh
+
+# Persistent tunnel that auto-reconnects
+autossh -M 0 -N -L 8847:127.0.0.1:8847 alice@<droplet-ip>
+```
+
+Or add it to your SSH config (`~/.ssh/config`) for convenience:
+
+```
+Host mcp-banana-tunnel
+    HostName <droplet-ip>
+    User alice
+    LocalForward 8847 127.0.0.1:8847
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
+```
+
+Then connect with just:
+
+```bash
+ssh -N mcp-banana-tunnel
+```
+
+**Step 3: Configure Claude Code**
+
+With the tunnel running, `localhost:8847` on your machine reaches the mcp-banana server. Configure Claude Code:
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://localhost:8847/mcp"
+}'
+```
+
+No `Authorization` header needed -- the tunnel provides authentication.
+
+**Step 4: Verify the connection**
+
+```bash
+# Test the tunnel is working
+curl http://localhost:8847/healthz
+# Expected: {"status":"ok"}
+
+# Verify Claude Code sees the server
+claude mcp list
+claude mcp get banana
+```
+
+#### Revoking a User's Access
+
+Remove their SSH user account or delete their key from `authorized_keys`:
+
+```bash
+# On the droplet:
+# Option A: Delete the user entirely
+userdel -r alice
+
+# Option B: Just remove their SSH key
+sed -i '/alice@company.com/d' /home/alice/.ssh/authorized_keys
+```
+
+Their tunnel will disconnect immediately, and they cannot reconnect.
+
+---
 
 ### Option 2: Single Shared Token
 
-For a solo developer or small trusted team. Generate a token:
+For a solo developer or small trusted team where SSH tunnel setup is not practical.
+
+#### Admin Setup
+
+**Step 1: Generate a token**
 
 ```bash
 openssl rand -hex 32
 ```
 
-Put it in the server `.env`:
+This produces a 64-character random hex string, e.g.: `e4a1c3b2d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2`
+
+**Step 2: Add to server `.env`**
+
+```bash
+# On the droplet:
+nano /opt/mcp-banana/.env
+```
+
+Set:
 
 ```
-MCP_AUTH_TOKEN=a1b2c3d4e5f6...
+MCP_AUTH_TOKEN=e4a1c3b2d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2
 ```
 
-Each client includes the same token in their Claude Code config:
+Restart the container (single token from env var is read at startup):
+
+```bash
+docker compose restart
+```
+
+**Step 3: Give the token to each user**
+
+Share the token securely (not via unencrypted email or Slack). Each user puts it in their Claude Code config.
+
+#### User Setup
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://localhost:8847/mcp",
+  "url": "http://<server-ip-or-tunnel>:8847/mcp",
   "headers": {
-    "Authorization": "Bearer a1b2c3d4e5f6..."
+    "Authorization": "Bearer e4a1c3b2d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
   }
 }'
 ```
 
-Downside: if you rotate this token, you must update every client. If you revoke it, everyone loses access.
+#### Limitations
+
+- If you rotate this token, **every user** must update their Claude Code config.
+- If you revoke it, **everyone** loses access simultaneously.
+- There is no way to revoke one user without affecting others.
+
+For teams, use Option 3 instead.
+
+---
 
 ### Option 3: Per-User Tokens File (Recommended for Teams)
 
-Create a tokens file on the server with one token per line:
+Each user gets their own unique token. Tokens are stored in a file on the server that is re-read on every request -- you can add, remove, or rotate tokens without restarting the server or Docker container.
+
+#### Admin Setup
+
+**Step 1: Create the tokens file**
 
 ```bash
-# On the server:
-nano /opt/mcp-banana/tokens.txt
+# On the droplet:
+touch /opt/mcp-banana/tokens.txt
+chmod 600 /opt/mcp-banana/tokens.txt
 ```
 
-File contents:
+**Step 2: Generate a token for each user**
+
+```bash
+# Generate Alice's token
+echo "# Alice (alice@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
+openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
+
+# Generate Bob's token
+echo "# Bob (bob@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
+openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
+```
+
+The file will look like:
 
 ```
-# Alice - generated 2026-04-10
+# Alice (alice@company.com) - generated 2026-04-10
 a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
-# Bob - generated 2026-04-10
+# Bob (bob@company.com) - generated 2026-04-10
 f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5
 ```
 
-Set the path in `.env`:
+Lines starting with `#` are comments (ignored). Empty lines are also ignored. Everything else is a valid token.
+
+**Step 3: Tell the server where to find the file**
+
+Add to `.env`:
 
 ```
 MCP_AUTH_TOKENS_FILE=/opt/mcp-banana/tokens.txt
 ```
 
-Each user gets their own token for their Claude Code config. To add or remove a user, edit `tokens.txt` -- **the file is re-read on every request, so changes take effect immediately without restarting the server or Docker container**.
-
-To generate a token for a new user:
+If the server is already running, restart it once to pick up the new env var:
 
 ```bash
-openssl rand -hex 32
+docker compose restart
 ```
 
-Add the output as a new line in `tokens.txt`. Give the token to the user. Done.
+After this initial restart, all future token changes are hot-reloaded (no restart needed).
 
-To revoke a user: delete their line from `tokens.txt`. Their next request will be rejected.
+**Step 4: Share each user's token securely**
+
+Send Alice her token via a secure channel. She puts it in her Claude Code config (see User Setup below).
+
+#### User Setup
+
+You receive a token from the admin (e.g., `a1b2c3d4e5f6...`). Configure Claude Code:
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://<server-ip-or-tunnel>:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+  }
+}'
+```
+
+Verify:
+
+```bash
+claude mcp list
+claude mcp get banana
+```
+
+#### Admin: Adding a New User
+
+No restart needed:
+
+```bash
+# On the droplet:
+echo "# Charlie (charlie@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
+openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
+```
+
+Note the generated token and share it with Charlie. The server picks it up on the next request automatically.
+
+#### Admin: Revoking a User
+
+No restart needed:
+
+```bash
+# On the droplet:
+# Remove Alice's comment and token lines
+nano /opt/mcp-banana/tokens.txt
+# Delete the two lines (comment + token) for Alice, then save
+```
+
+Alice's next request will immediately return `401 {"error":"unauthorized"}`.
+
+#### Admin: Rotating a User's Token
+
+No restart needed:
+
+```bash
+# On the droplet:
+# 1. Generate a new token
+NEW_TOKEN=$(openssl rand -hex 32)
+echo "New token for Alice: $NEW_TOKEN"
+
+# 2. Replace Alice's old token in the file
+# Edit tokens.txt and swap Alice's token line with the new one
+nano /opt/mcp-banana/tokens.txt
+
+# 3. Share the new token with Alice -- she updates her Claude Code config
+```
+
+#### Admin: Viewing Active Tokens
+
+```bash
+# On the droplet:
+# Show all active tokens (skip comments and blank lines)
+grep -v '^#' /opt/mcp-banana/tokens.txt | grep -v '^$'
+
+# Count active tokens
+grep -cv '^#\|^$' /opt/mcp-banana/tokens.txt
+```
+
+---
 
 ### How Token Auth Works
 
@@ -189,22 +450,28 @@ Client (Claude Code)
   sends: Authorization: Bearer <token>
     |
     v
-Middleware checks:
-  1. Is MCP_AUTH_TOKENS_FILE set? Read the file, check if token is in it.
-  2. Is MCP_AUTH_TOKEN set? Check if token matches.
-  3. Neither set? Skip auth (SSH tunnel mode).
-    |
-    v
-Match found -> request proceeds
-No match -> 401 {"error":"unauthorized"}
+Middleware checks (on every request):
+  1. Is MCP_AUTH_TOKENS_FILE set?
+     -> Read the file from disk (hot-reload)
+     -> Check if <token> matches any line in the file
+     -> If match: ALLOW
+  2. Is MCP_AUTH_TOKEN set?
+     -> Check if <token> matches the env var value
+     -> If match: ALLOW
+  3. Neither set?
+     -> Skip auth entirely (SSH tunnel mode)
+     -> ALLOW all requests
+  4. Auth configured but no match?
+     -> 401 {"error":"unauthorized"}
 ```
 
 ### Security Properties
 
 - Tokens from `MCP_AUTH_TOKEN` are registered with the sanitizer at startup, so they are redacted from logs.
 - `GET /healthz` is always exempt from token auth so Docker health checks work without credentials.
-- Tokens in the file are not registered with the sanitizer (they change dynamically), but error responses never include token values regardless.
-- To rotate tokens: update the tokens file (no restart needed), then give users their new tokens.
+- The tokens file is re-read from disk on every request. This makes hot-reload possible but means the file must be readable by the process running inside the Docker container.
+- Error responses never include the token value, whether auth succeeds or fails.
+- To rotate tokens: update the tokens file (no restart needed), then share the new token with the affected user.
 
 ---
 
