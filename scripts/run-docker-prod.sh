@@ -33,6 +33,25 @@ if [ -z "$DOMAIN" ]; then
   exit 1
 fi
 
+# Auto-update OAUTH_BASE_URL in .env from MCP_DOMAIN if empty
+if grep -q "^OAUTH_BASE_URL=$" .env 2>/dev/null; then
+  sed -i.bak "s|^OAUTH_BASE_URL=$|OAUTH_BASE_URL=https://${DOMAIN}:8847|" .env && rm -f .env.bak
+  echo "OAUTH_BASE_URL set to https://${DOMAIN}:8847 in .env"
+fi
+
+# Auto-update MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE in .env if empty
+if grep -q "^MCP_TLS_CERT_FILE=$" .env 2>/dev/null; then
+  sed -i.bak "s|^MCP_TLS_CERT_FILE=$|MCP_TLS_CERT_FILE=/certs/fullchain.pem|" .env && rm -f .env.bak
+  sed -i.bak "s|^MCP_TLS_KEY_FILE=$|MCP_TLS_KEY_FILE=/certs/privkey.pem|" .env && rm -f .env.bak
+  echo "MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /certs/ paths in .env"
+fi
+
+# Re-source .env after updates
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+
 if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
   echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
