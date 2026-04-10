@@ -10,86 +10,58 @@ A Go MCP server that gives Claude Code access to Google's Gemini image generatio
 
 mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token or OAuth 2.1 authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
 
-![Architecture](docs/diagrams/high-level-architecture.png)
-
 ## Tools
 
-- **generate_image** - Create an image from a text prompt
-- **edit_image** - Modify an existing image with text instructions
-- **list_models** - Enumerate all available model aliases and capabilities
-- **recommend_model** - Get a model recommendation based on task description and priority
+- **generate_image** — Create an image from a text prompt
+- **edit_image** — Modify an existing image with text instructions
+- **list_models** — Enumerate all available model aliases and capabilities
+- **recommend_model** — Get a model recommendation based on task description and priority
 
 ## Quick Start
 
-**1. Clone and configure**
+Three modes are available. Pick one:
+
+**Local (stdio) — no Docker needed:**
 
 ```bash
 git clone https://github.com/reshinto/mcp-banana.git && cd mcp-banana
-cp .env.example .env
-# Edit .env and set GEMINI_API_KEY, MCP_AUTH_TOKEN
-# Generate a mcp auth token with: openssl rand -hex 32
+cp .env.example .env   # set GEMINI_API_KEY
+./scripts/run-local.sh
 ```
 
-**2. Start the server**
+**Docker Dev (HTTP, localhost):**
 
 ```bash
-docker compose up -d
+git clone https://github.com/reshinto/mcp-banana.git && cd mcp-banana
+cp .env.example .env   # set GEMINI_API_KEY and MCP_AUTH_TOKEN
+./scripts/run-docker-dev.sh
 ```
 
-**3. Add the MCP server to Claude Code**
+**Docker Prod (HTTPS, public server):**
 
 ```bash
-claude mcp add-json --scope user banana '{
-  "type": "http",
-  "url": "http://<server-ip>:8847/mcp",
-  "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>",
-    "X-Gemini-API-Key": "<your-gemini-api-key>"
-  }
-}'
+./scripts/run-docker-prod.sh
 ```
 
-The `X-Gemini-API-Key` header is optional. When provided, the server uses that key for the request instead of the server's default `GEMINI_API_KEY`. This enables each user to bill their own Gemini quota without sharing a single server-side key.
-
-**4. Generate an image**
-
-Ask Claude Code:
-
-> "Generate an image of a cute cat sitting on a cozy blanket"
-
-See [Claude Code Integration](docs/claude-code-integration.md) for full setup instructions including stdio mode, SSH tunnels, and troubleshooting.
-
-## Claude Desktop Integration
-
-mcp-banana supports OAuth 2.1 for connecting via Claude Desktop GUI.
-
-**Prerequisites:** A subdomain (e.g., `banana.yourdomain.com`) with a TLS certificate, and OAuth credentials from at least one provider (Google, GitHub, or Apple).
-
-1. Configure OAuth provider credentials and TLS in `.env`
-2. Start the server: `docker compose up -d`
-3. In Claude Desktop, go to **Customize > Connectors**
-4. Add your server URL: `https://banana.yourdomain.com:8847/mcp`
-5. Sign in with your chosen provider when prompted
-
-See [Claude Code Integration](docs/claude-code-integration.md) for detailed setup.
+See [docs/setup-and-operations.md](docs/setup-and-operations.md) for full step-by-step instructions for each mode, including DNS setup, TLS certificates, and production configuration.
 
 ## Documentation
 
 | Document | Description |
 |---|---|
+| [docs/setup-and-operations.md](docs/setup-and-operations.md) | Prerequisites, all three deployment modes, environment variable reference, Docker operations |
+| [docs/authentication.md](docs/authentication.md) | All auth methods: SSH tunnel, bearer tokens, OAuth 2.1, per-user Gemini keys |
+| [docs/claude-code-integration.md](docs/claude-code-integration.md) | Exact commands to connect Claude Code and Claude Desktop |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems, error messages, and fixes |
 | [docs/architecture.md](docs/architecture.md) | System design, package layout, request flow, startup sequence |
-| [docs/authentication.md](docs/authentication.md) | SSH tunnel, single token, and per-user token auth options |
-| [docs/setup-and-operations.md](docs/setup-and-operations.md) | Local setup, configuration reference, production deployment |
+| [docs/security.md](docs/security.md) | Threat model, input validation, error mapping, HTTP error contract |
 | [docs/tools-reference.md](docs/tools-reference.md) | MCP tool schemas, parameters, success and error responses |
 | [docs/models.md](docs/models.md) | Model aliases, verification status, sentinel ID procedure |
-| [docs/security.md](docs/security.md) | Threat model, input validation, error mapping, HTTP error contract |
-| [docs/claude-code-integration.md](docs/claude-code-integration.md) | Stdio and HTTP setup, team adoption, troubleshooting |
 | [docs/testing.md](docs/testing.md) | Test inventory, patterns, coverage threshold |
 | [docs/go-guide.md](docs/go-guide.md) | Go language concepts used in this codebase, with examples |
 | [docs/root-files.md](docs/root-files.md) | Description of every root-level file |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Common problems, error messages, and fixes |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development workflow, coding standards, PR process |
 
 ## License
 
-MIT License -- Copyright (c) 2026 Terence. See [LICENSE](LICENSE).
+MIT License — Copyright (c) 2026 Terence. See [LICENSE](LICENSE).

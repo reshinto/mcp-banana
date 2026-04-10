@@ -4,26 +4,22 @@
 
 mcp-banana integrates with Claude Code as an MCP server. Claude Code communicates with the server using the Model Context Protocol over either a local stdio transport or a remote HTTP transport.
 
-## Team Adoption
-
 | Scope | Use Case | Storage |
 |---|---|---|
 | **User scope** (`--scope user`) | Personal local development; developer-specific credentials | `~/.claude.json` (not committed) |
 | **Project scope** (`--scope project`) | Shared team configuration with no secrets | `.mcp.json` (committed to repository) |
-| **HTTP** | Preferred transport for remote/shared server | Direct HTTP or SSH-tunneled HTTP |
-| **SSE** | Deprecated | Do not use |
 
 The repository includes a `.mcp.json` with a project-scoped stdio configuration. Each developer supplies their own `GEMINI_API_KEY` via user-scoped config or environment variable.
 
 ---
 
-## Option A: Local Stdio Mode (Development)
+## Option A: Local stdio
 
-Stdio mode runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
+Runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
 
-**Prerequisites:** Build the binary (`make build`), obtain a Gemini API key, and verify model IDs in `internal/gemini/registry.go` (see [models.md](models.md)).
+**Prerequisites:** Build the binary first with `./scripts/run-local.sh` (or `make build`).
 
-### User-Scoped Setup (Secrets Stored Locally)
+**User-scoped setup (secrets stored locally):**
 
 ```bash
 claude mcp add-json --scope user banana '{
@@ -34,9 +30,9 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
-Replace `./mcp-banana` with the absolute path to your built binary if it is not in the current directory (e.g., `/usr/local/bin/mcp-banana`). The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
+Replace `./mcp-banana` with the absolute path to your built binary if you call this from a different directory (e.g., `/usr/local/bin/mcp-banana`). The `env` block is stored only in `~/.claude.json`.
 
-### Project-Scoped Setup (No Secrets, Committed to Repo)
+**Project-scoped setup (no secrets, committed to repo):**
 
 ```bash
 claude mcp add-json --scope project banana '{
@@ -46,99 +42,83 @@ claude mcp add-json --scope project banana '{
 }'
 ```
 
-This configuration is saved to `.mcp.json` and is already committed in this repository. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on `PATH`.
+This is saved to `.mcp.json`. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on PATH.
 
 ---
 
-## Option B: HTTP Mode (Docker Dev or Remote)
+## Option B: Docker Dev (HTTP)
 
-HTTP mode connects Claude Code to a running mcp-banana server over the network. Every request requires a bearer token in the `Authorization` header (unless the server is configured for no-auth SSH tunnel mode — see [authentication.md](authentication.md)).
-
-### Basic HTTP Connection
+Connect Claude Code to the server running in Docker on localhost. The server must be started first with `./scripts/run-docker-dev.sh`.
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
   "url": "http://127.0.0.1:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-token>"
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-Replace `127.0.0.1:8847` with the actual server address. When using an SSH tunnel, keep `127.0.0.1:8847` as the URL and let the tunnel handle routing (see [authentication.md — Option 1: SSH Tunnel](authentication.md) for setup instructions).
+Replace `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from `.env`. The `X-Gemini-API-Key` header is optional — when omitted, the server uses its default `GEMINI_API_KEY`.
 
-### HTTP Connection with Per-User Gemini Key
-
-If you want tool calls to use your personal Gemini API key instead of the server's shared key, add the `X-Gemini-API-Key` header:
+**SSH tunnel setup:** When using an SSH tunnel instead of a bearer token, keep the URL as `http://localhost:8847/mcp` and omit the `Authorization` header:
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://127.0.0.1:8847/mcp",
+  "url": "http://localhost:8847/mcp"
+}'
+```
+
+See [Authentication — Option 1](authentication.md#option-1-no-auth-ssh-tunnel) for SSH tunnel setup.
+
+---
+
+## Option C: Docker Prod (HTTPS)
+
+Connect Claude Code to a production server with HTTPS. The server must be running with TLS configured (see [Setup and Operations — Mode 3](setup-and-operations.md#mode-3--docker-prod-https-public)).
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.yourdomain.com:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-token>",
-    "X-Gemini-API-Key": "<your-personal-gemini-key>"
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-The server registers the per-request key with the output sanitizer — it is never echoed back in tool responses or logs.
+Replace `mcp.yourdomain.com` with your actual domain, `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from the server's `.env`, and `<your-gemini-api-key>` with your key from [aistudio.google.com](https://aistudio.google.com/).
+
+Both headers are required in this configuration:
+
+- `Authorization` — authenticates the client with the server
+- `X-Gemini-API-Key` — provides your personal Gemini API key (so Gemini charges you, not the server operator)
 
 ---
 
-## Option C: Claude Desktop GUI (OAuth)
+## Option D: Claude Desktop (OAuth)
 
-OAuth 2.1 lets users connect Claude Desktop to a remote mcp-banana server through a browser-based sign-in flow. No manual token distribution is needed.
+OAuth 2.1 lets Claude Desktop users authenticate through a browser sign-in flow instead of a bearer token.
 
 **Prerequisites:**
 
-- A public subdomain (e.g., `banana.yourdomain.com`) with an A record pointing to your server's IP
-- A TLS certificate for that subdomain (see [setup-and-operations.md](setup-and-operations.md) for `certbot` instructions)
-- OAuth credentials from at least one provider (Google, GitHub, or Apple) — see [authentication.md — Option 4: OAuth 2.1](authentication.md) for provider registration steps
-- `OAUTH_BASE_URL`, provider credentials, `MCP_TLS_CERT_FILE`, and `MCP_TLS_KEY_FILE` set in `.env`
+- OAuth configured on the server — see [Authentication — Option 3](authentication.md#option-3-oauth-21-claude-desktop) for provider setup
+- TLS enabled on the server (HTTPS is required for OAuth)
+- The server is running and reachable at `https://mcp.yourdomain.com:8847`
 
-**Setup:**
+**Steps:**
 
-1. Configure OAuth and TLS in `.env` on your server:
+1. Open Claude Desktop.
+2. Go to **Customize > Connectors**.
+3. Add your server URL: `https://mcp.yourdomain.com:8847/mcp`
+4. Claude Desktop fetches the OAuth discovery document at `/.well-known/oauth-authorization-server`, registers a client dynamically, and redirects you to sign in.
+5. Click your provider (Google, GitHub, or Apple) and complete the browser sign-in flow.
 
-```bash
-OAUTH_BASE_URL=https://banana.yourdomain.com:8847
-OAUTH_GOOGLE_CLIENT_ID=<your-client-id>
-OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
-MCP_TLS_CERT_FILE=/certs/fullchain.pem
-MCP_TLS_KEY_FILE=/certs/privkey.pem
-```
-
-2. Uncomment the `volumes` block in `docker-compose.yml` to mount your TLS certificates:
-
-```yaml
-volumes:
-  - /etc/letsencrypt/live/banana.yourdomain.com:/certs:ro
-```
-
-3. Restart the server:
-
-```bash
-docker compose up -d --force-recreate
-```
-
-4. Verify the HTTPS endpoint is reachable:
-
-```bash
-curl https://banana.yourdomain.com:8847/healthz
-# Expected: {"status":"ok"}
-```
-
-5. In Claude Desktop, open **Customize > Connectors** and add the server URL:
-
-```
-https://banana.yourdomain.com:8847/mcp
-```
-
-6. Claude Desktop fetches the OAuth discovery document at `/.well-known/oauth-authorization-server`, registers a client dynamically, and opens the login page at `/authorize`. Click your provider and complete the browser sign-in flow.
-
-After sign-in, Claude Desktop stores the OAuth access and refresh tokens and handles token refresh automatically (access tokens expire after 1 hour; refresh tokens after 30 days). You can start using the image generation tools immediately.
+After sign-in, Claude Desktop stores the OAuth access and refresh tokens and handles token refresh automatically (access tokens expire after 1 hour; refresh tokens after 30 days).
 
 ---
 
@@ -151,24 +131,22 @@ claude mcp list
 claude mcp get banana
 ```
 
-Both commands should show the `banana` server entry. If configured correctly and model IDs are verified, Claude Code will be able to call all four tools.
+Both commands should show the `banana` server entry. If configured correctly, Claude Code will be able to call all four tools.
 
-### Example Prompts
+**Example prompts to test:**
 
-Once integrated, you can call the tools directly by asking Claude:
-
-- "List the available image generation models" — calls `list_models`
-- "What model do you recommend for a quick draft?" — calls `recommend_model`
-- "Generate an image of a sunset over the ocean" — calls `generate_image`
-- "Edit this image to make the sky more dramatic" — calls `edit_image` with a provided image
+- `List the available image generation models` — calls `list_models`
+- `What model do you recommend for a quick draft?` — calls `recommend_model`
+- `Generate an image of a sunset over the ocean` — calls `generate_image`
+- `Edit this image to make the sky more dramatic` — calls `edit_image` with a provided image
 
 ---
 
 ## Scope Conflicts
 
-Claude Code resolves MCP servers by name. If the same server name (e.g. `banana`) exists in both project scope (`.mcp.json`) and user scope (`~/.claude.json`), the project-scoped entry takes precedence. This means `claude mcp get banana` and `claude mcp list` may show different results — `list` checks connectivity across all scopes, while `get` returns the highest-priority match.
+Claude Code resolves MCP servers by name. If the same server name (e.g. `banana`) exists in both project scope (`.mcp.json`) and user scope (`~/.claude.json`), the project-scoped entry takes precedence.
 
-**Common scenario:** You add an HTTP config with `--scope user`, but the repo already has a stdio config in `.mcp.json`. `claude mcp list` shows the HTTP entry as connected, but `claude mcp get banana` shows the project-scoped stdio entry (which may be failing).
+**Common scenario:** You add an HTTP config with `--scope user`, but the repo already has a stdio config in `.mcp.json`. `claude mcp list` shows the HTTP entry as connected, but `claude mcp get banana` shows the project-scoped stdio entry.
 
 **Fix:** Remove the entry from the scope you do not want:
 
@@ -181,3 +159,9 @@ claude mcp remove banana --scope user
 ```
 
 After removing the conflicting entry, verify with `claude mcp get banana`.
+
+---
+
+## Troubleshooting
+
+See [Troubleshooting](troubleshooting.md) for common problems including connection failures, auth errors, and binary not found errors.
