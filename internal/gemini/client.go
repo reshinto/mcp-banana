@@ -16,26 +16,36 @@ var allowedOutputMIMETypes = map[string]bool{
 	"image/webp": true,
 }
 
+// contentGenerator abstracts the genai model generation call for testability.
+type contentGenerator interface {
+	GenerateContent(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
+}
+
 // Client wraps the genai SDK client and enforces concurrency limits for pro models.
 type Client struct {
-	inner        *genai.Client
+	generator    contentGenerator
 	timeoutSecs  int
 	proSemaphore chan struct{}
+}
+
+// genaiClientFactory creates a genai.Client. Overridden in tests to inject failures.
+var genaiClientFactory = func(ctx context.Context, config *genai.ClientConfig) (*genai.Client, error) {
+	return genai.NewClient(ctx, config)
 }
 
 // NewClient creates a new Gemini API client with the given configuration.
 // proConcurrency sets the maximum number of concurrent requests for the pro model.
 func NewClient(startupContext context.Context, apiKey string, timeoutSecs int, proConcurrency int) (*Client, error) {
-	inner, err := genai.NewClient(startupContext, &genai.ClientConfig{
+	inner, clientError := genaiClientFactory(startupContext, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create genai client: %w", err)
+	if clientError != nil {
+		return nil, fmt.Errorf("failed to create genai client: %w", clientError)
 	}
 
 	return &Client{
-		inner:        inner,
+		generator:    inner.Models,
 		timeoutSecs:  timeoutSecs,
 		proSemaphore: make(chan struct{}, proConcurrency),
 	}, nil
@@ -43,8 +53,8 @@ func NewClient(startupContext context.Context, apiKey string, timeoutSecs int, p
 
 // GenerateImage creates a new image from a text prompt using the specified model alias.
 func (client *Client) GenerateImage(requestContext context.Context, modelAlias string, prompt string, options GenerateOptions) (*ImageResult, error) {
-	modelInfo, err := LookupModel(modelAlias)
-	if err != nil {
+	modelInfo, lookupError := LookupModel(modelAlias)
+	if lookupError != nil {
 		return nil, fmt.Errorf("%s: %s", ErrModelUnavail, "unknown model alias")
 	}
 
@@ -63,9 +73,9 @@ func (client *Client) GenerateImage(requestContext context.Context, modelAlias s
 	defer cancel()
 
 	startTime := time.Now()
-	resp, err := client.inner.Models.GenerateContent(timeoutContext, modelName, contents, config)
-	if err != nil {
-		safeCode, safeMsg := MapError(err)
+	resp, generateError := client.generator.GenerateContent(timeoutContext, modelName, contents, config)
+	if generateError != nil {
+		safeCode, safeMsg := MapError(generateError)
 		return nil, fmt.Errorf("%s: %s", safeCode, safeMsg)
 	}
 
@@ -75,8 +85,8 @@ func (client *Client) GenerateImage(requestContext context.Context, modelAlias s
 // EditImage modifies an existing image using text instructions and the specified model alias.
 // imageData must be raw decoded bytes (not base64).
 func (client *Client) EditImage(requestContext context.Context, modelAlias string, imageData []byte, mimeType string, instructions string) (*ImageResult, error) {
-	modelInfo, err := LookupModel(modelAlias)
-	if err != nil {
+	modelInfo, lookupError := LookupModel(modelAlias)
+	if lookupError != nil {
 		return nil, fmt.Errorf("%s: %s", ErrModelUnavail, "unknown model alias")
 	}
 
@@ -95,9 +105,9 @@ func (client *Client) EditImage(requestContext context.Context, modelAlias strin
 	defer cancel()
 
 	startTime := time.Now()
-	resp, err := client.inner.Models.GenerateContent(timeoutContext, modelName, contents, config)
-	if err != nil {
-		safeCode, safeMsg := MapError(err)
+	resp, generateError := client.generator.GenerateContent(timeoutContext, modelName, contents, config)
+	if generateError != nil {
+		safeCode, safeMsg := MapError(generateError)
 		return nil, fmt.Errorf("%s: %s", safeCode, safeMsg)
 	}
 

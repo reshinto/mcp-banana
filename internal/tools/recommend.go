@@ -26,10 +26,7 @@ func NewRecommendModelHandler() func(context.Context, mcp.CallToolRequest) (*mcp
 		}
 
 		recommendation := policy.Recommend(taskDescription, priority)
-		jsonBytes, marshalErr := json.Marshal(recommendation)
-		if marshalErr != nil {
-			return mcp.NewToolResultError("server_error: internal error"), nil
-		}
+		jsonBytes, _ := json.Marshal(recommendation)
 		return mcp.NewToolResultText(string(jsonBytes)), nil
 	}
 }

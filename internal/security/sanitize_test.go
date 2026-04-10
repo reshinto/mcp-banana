@@ -6,6 +6,20 @@ import (
 	"github.com/reshinto/mcp-banana/internal/security"
 )
 
+func TestRegisterSecret_EmptyString(test *testing.T) {
+	test.Cleanup(security.ClearSecrets)
+
+	// Registering an empty secret should be a no-op.
+	security.RegisterSecret("")
+	// If empty string were registered, it would replace every character boundary.
+	// Verify that sanitization still works normally.
+	input := "no secrets here"
+	result := security.SanitizeString(input)
+	if result != input {
+		test.Errorf("expected %q unchanged after registering empty secret, got %q", input, result)
+	}
+}
+
 func TestSanitizeString_NoSecretsRegistered(test *testing.T) {
 	test.Cleanup(security.ClearSecrets)
 

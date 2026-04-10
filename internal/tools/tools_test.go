@@ -146,6 +146,25 @@ func TestGenerateImageHandler_GeminiError(test *testing.T) {
 	}
 }
 
+func TestGenerateImageHandler_InvalidAspectRatio(test *testing.T) {
+	svc := &mockGeminiService{}
+	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+
+	req := makeRequest(map[string]any{"prompt": "a sunset", "aspect_ratio": "99:99"})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result for invalid aspect ratio")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_aspect_ratio") {
+		test.Errorf("expected error to contain 'invalid_aspect_ratio', got: %q", textContent)
+	}
+}
+
 // --- list_models tests ---
 
 func TestListModelsHandler_NoGeminiID(test *testing.T) {
@@ -204,6 +223,26 @@ func TestRecommendModelHandler_Success(test *testing.T) {
 	}
 }
 
+func TestRecommendModelHandler_InvalidPriority(test *testing.T) {
+	handler := NewRecommendModelHandler()
+	req := makeRequest(map[string]any{
+		"task_description": "create an image",
+		"priority":         "turbo-mode",
+	})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result for invalid priority")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_priority") {
+		test.Errorf("expected 'invalid_priority' in error, got: %q", textContent)
+	}
+}
+
 func TestRecommendModelHandler_EmptyTaskDescription(test *testing.T) {
 	handler := NewRecommendModelHandler()
 	req := makeRequest(map[string]any{"task_description": ""})
@@ -248,6 +287,76 @@ func TestEditImageHandler_Success(test *testing.T) {
 	}
 	if decoded.ModelUsed != "nano-banana-2" {
 		test.Errorf("expected model_used nano-banana-2, got %q", decoded.ModelUsed)
+	}
+}
+
+func TestEditImageHandler_EmptyInstructions(test *testing.T) {
+	svc := &mockGeminiService{}
+	handler := NewEditImageHandler(svc, 10*1024*1024)
+
+	req := makeRequest(map[string]any{
+		"instructions": "",
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result for empty instructions")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_prompt") {
+		test.Errorf("expected 'invalid_prompt' in error, got: %q", textContent)
+	}
+}
+
+func TestEditImageHandler_InvalidModel(test *testing.T) {
+	svc := &mockGeminiService{}
+	handler := NewEditImageHandler(svc, 10*1024*1024)
+
+	req := makeRequest(map[string]any{
+		"instructions": "make it brighter",
+		"model":        "not-a-real-model",
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result for invalid model")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_model") {
+		test.Errorf("expected 'invalid_model' in error, got: %q", textContent)
+	}
+}
+
+func TestEditImageHandler_GeminiError(test *testing.T) {
+	svc := &mockGeminiService{editError: errors.New("internal failure")}
+	handler := NewEditImageHandler(svc, 10*1024*1024)
+
+	req := makeRequest(map[string]any{
+		"instructions": "make it brighter",
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result for Gemini error")
+	}
+	textContent := extractTextContent(test, result)
+	if strings.Contains(textContent, "internal failure") {
+		test.Errorf("raw error text must not appear in response, got: %q", textContent)
 	}
 }
 

@@ -3,12 +3,52 @@ package gemini
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/genai"
 )
+
+// mockContentGenerator is a test double for the contentGenerator interface.
+type mockContentGenerator struct {
+	response *genai.GenerateContentResponse
+	error    error
+}
+
+func (mock *mockContentGenerator) GenerateContent(_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+	return mock.response, mock.error
+}
+
+// newTestClient creates a Client with a mock generator for testing.
+func newTestClient(mock *mockContentGenerator) *Client {
+	return &Client{
+		generator:    mock,
+		timeoutSecs:  30,
+		proSemaphore: make(chan struct{}, 2),
+	}
+}
+
+// validImageResponse returns a GenerateContentResponse with a valid PNG image part.
+func validImageResponse() *genai.GenerateContentResponse {
+	return &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content: &genai.Content{
+					Parts: []*genai.Part{
+						{
+							InlineData: &genai.Blob{
+								Data:     []byte("fake-png-data"),
+								MIMEType: "image/png",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
 
 // TestBuildGenerateInputs verifies model name, content parts, and config construction.
 func TestBuildGenerateInputs(test *testing.T) {
@@ -276,11 +316,266 @@ func TestExtractImage(test *testing.T) {
 	})
 }
 
+// --- NewClient tests ---
+
+func TestNewClient_Success(test *testing.T) {
+	client, clientError := NewClient(context.Background(), "fake-test-key", 60, 3)
+	if clientError != nil {
+		test.Fatalf("unexpected error: %v", clientError)
+	}
+	if client == nil {
+		test.Fatal("expected non-nil client")
+	}
+	if client.generator == nil {
+		test.Error("expected non-nil generator")
+	}
+	if client.timeoutSecs != 60 {
+		test.Errorf("expected timeout 60, got %d", client.timeoutSecs)
+	}
+}
+
+func TestNewClient_FactoryError(test *testing.T) {
+	original := genaiClientFactory
+	defer func() { genaiClientFactory = original }()
+
+	genaiClientFactory = func(_ context.Context, _ *genai.ClientConfig) (*genai.Client, error) {
+		return nil, errors.New("simulated SDK init failure")
+	}
+
+	_, clientError := NewClient(context.Background(), "fake-key", 30, 2)
+	if clientError == nil {
+		test.Fatal("expected error when factory fails")
+	}
+	if !strings.Contains(clientError.Error(), "failed to create genai client") {
+		test.Errorf("expected wrapped error message, got: %v", clientError)
+	}
+}
+
+// --- GenerateImage tests ---
+
+func TestGenerateImage_Success(test *testing.T) {
+	mock := &mockContentGenerator{response: validImageResponse()}
+	client := newTestClient(mock)
+
+	// Use a valid alias from the registry — save/restore for this test.
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"test-model": {Alias: "test-model", GeminiID: "gemini-test"},
+	}
+
+	result, generateError := client.GenerateImage(context.Background(), "test-model", "a sunset", GenerateOptions{})
+	if generateError != nil {
+		test.Fatalf("unexpected error: %v", generateError)
+	}
+	if result.ModelUsed != "test-model" {
+		test.Errorf("expected model_used 'test-model', got %q", result.ModelUsed)
+	}
+	if result.MIMEType != "image/png" {
+		test.Errorf("expected mime_type 'image/png', got %q", result.MIMEType)
+	}
+}
+
+func TestGenerateImage_WithAspectRatio(test *testing.T) {
+	mock := &mockContentGenerator{response: validImageResponse()}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"test-model": {Alias: "test-model", GeminiID: "gemini-test"},
+	}
+
+	result, generateError := client.GenerateImage(context.Background(), "test-model", "a sunset", GenerateOptions{AspectRatio: "16:9"})
+	if generateError != nil {
+		test.Fatalf("unexpected error: %v", generateError)
+	}
+	if result.MIMEType != "image/png" {
+		test.Errorf("expected mime_type 'image/png', got %q", result.MIMEType)
+	}
+}
+
+func TestGenerateImage_UnknownModel(test *testing.T) {
+	mock := &mockContentGenerator{}
+	client := newTestClient(mock)
+
+	_, generateError := client.GenerateImage(context.Background(), "nonexistent-model", "a cat", GenerateOptions{})
+	if generateError == nil {
+		test.Fatal("expected error for unknown model")
+	}
+	if !strings.Contains(generateError.Error(), ErrModelUnavail) {
+		test.Errorf("expected model_unavailable error, got: %v", generateError)
+	}
+}
+
+func TestGenerateImage_APIError(test *testing.T) {
+	mock := &mockContentGenerator{error: errors.New("internal API failure")}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"test-model": {Alias: "test-model", GeminiID: "gemini-test"},
+	}
+
+	_, generateError := client.GenerateImage(context.Background(), "test-model", "a portrait", GenerateOptions{})
+	if generateError == nil {
+		test.Fatal("expected error when API fails")
+	}
+	// Must contain a safe error code, not the raw error text
+	if strings.Contains(generateError.Error(), "internal API failure") {
+		test.Error("SECURITY: raw error text leaked into response")
+	}
+}
+
+func TestGenerateImage_ProModelAcquiresSlot(test *testing.T) {
+	mock := &mockContentGenerator{response: validImageResponse()}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"nano-banana-pro": {Alias: "nano-banana-pro", GeminiID: "gemini-pro"},
+	}
+
+	result, generateError := client.GenerateImage(context.Background(), "nano-banana-pro", "a portrait", GenerateOptions{})
+	if generateError != nil {
+		test.Fatalf("unexpected error: %v", generateError)
+	}
+	if result.ModelUsed != "nano-banana-pro" {
+		test.Errorf("expected model_used 'nano-banana-pro', got %q", result.ModelUsed)
+	}
+}
+
+func TestGenerateImage_ProModelContextCancelled(test *testing.T) {
+	mock := &mockContentGenerator{}
+	// Create a client with semaphore of size 1 and fill it.
+	client := &Client{
+		generator:    mock,
+		timeoutSecs:  30,
+		proSemaphore: make(chan struct{}, 1),
+	}
+	client.proSemaphore <- struct{}{} // fill the slot
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"nano-banana-pro": {Alias: "nano-banana-pro", GeminiID: "gemini-pro"},
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, generateError := client.GenerateImage(cancelCtx, "nano-banana-pro", "a portrait", GenerateOptions{})
+	if generateError == nil {
+		test.Fatal("expected error when context is cancelled")
+	}
+	if !strings.Contains(generateError.Error(), ErrServerError) {
+		test.Errorf("expected server_error, got: %v", generateError)
+	}
+}
+
+// --- EditImage tests ---
+
+func TestEditImage_Success(test *testing.T) {
+	mock := &mockContentGenerator{response: validImageResponse()}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"test-model": {Alias: "test-model", GeminiID: "gemini-test"},
+	}
+
+	result, editError := client.EditImage(context.Background(), "test-model", []byte("image-data"), "image/png", "make it brighter")
+	if editError != nil {
+		test.Fatalf("unexpected error: %v", editError)
+	}
+	if result.ModelUsed != "test-model" {
+		test.Errorf("expected model_used 'test-model', got %q", result.ModelUsed)
+	}
+}
+
+func TestEditImage_UnknownModel(test *testing.T) {
+	mock := &mockContentGenerator{}
+	client := newTestClient(mock)
+
+	_, editError := client.EditImage(context.Background(), "nonexistent-model", []byte("data"), "image/png", "edit it")
+	if editError == nil {
+		test.Fatal("expected error for unknown model")
+	}
+	if !strings.Contains(editError.Error(), ErrModelUnavail) {
+		test.Errorf("expected model_unavailable error, got: %v", editError)
+	}
+}
+
+func TestEditImage_APIError(test *testing.T) {
+	mock := &mockContentGenerator{error: errors.New("safety blocked")}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"test-model": {Alias: "test-model", GeminiID: "gemini-test"},
+	}
+
+	_, editError := client.EditImage(context.Background(), "test-model", []byte("data"), "image/png", "edit it")
+	if editError == nil {
+		test.Fatal("expected error when API fails")
+	}
+}
+
+func TestEditImage_ProModelAcquiresSlot(test *testing.T) {
+	mock := &mockContentGenerator{response: validImageResponse()}
+	client := newTestClient(mock)
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"nano-banana-pro": {Alias: "nano-banana-pro", GeminiID: "gemini-pro"},
+	}
+
+	result, editError := client.EditImage(context.Background(), "nano-banana-pro", []byte("data"), "image/png", "edit it")
+	if editError != nil {
+		test.Fatalf("unexpected error: %v", editError)
+	}
+	if result.ModelUsed != "nano-banana-pro" {
+		test.Errorf("expected model_used 'nano-banana-pro', got %q", result.ModelUsed)
+	}
+}
+
+func TestEditImage_ProModelContextCancelled(test *testing.T) {
+	mock := &mockContentGenerator{}
+	client := &Client{
+		generator:    mock,
+		timeoutSecs:  30,
+		proSemaphore: make(chan struct{}, 1),
+	}
+	client.proSemaphore <- struct{}{} // fill the slot
+
+	originalRegistry := registry
+	defer func() { registry = originalRegistry }()
+	registry = map[string]ModelInfo{
+		"nano-banana-pro": {Alias: "nano-banana-pro", GeminiID: "gemini-pro"},
+	}
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, editError := client.EditImage(cancelCtx, "nano-banana-pro", []byte("data"), "image/png", "edit it")
+	if editError == nil {
+		test.Fatal("expected error when context is cancelled")
+	}
+	if !strings.Contains(editError.Error(), ErrServerError) {
+		test.Errorf("expected server_error, got: %v", editError)
+	}
+}
+
 // TestProSemaphoreCancellation verifies that context cancellation releases the pro slot wait.
 func TestProSemaphoreCancellation(test *testing.T) {
 	// Create a client with a semaphore of size 1 to easily fill it.
 	client := &Client{
-		inner:        nil, // not used in this test
+		generator:    nil, // not used in this test
 		timeoutSecs:  30,
 		proSemaphore: make(chan struct{}, 1),
 	}

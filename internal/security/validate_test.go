@@ -250,6 +250,36 @@ func TestValidateAndDecodeImage_MagicByteMismatch(test *testing.T) {
 	}
 }
 
+// TestValidateAndDecodeImage_PNGMagicMismatch checks that non-PNG bytes declared as image/png are rejected.
+func TestValidateAndDecodeImage_PNGMagicMismatch(test *testing.T) {
+	raw := makeJPEGBytes(20) // JPEG bytes but declared as PNG
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	_, err := security.ValidateAndDecodeImage(encoded, "image/png", 1024*1024)
+	if err == nil {
+		test.Error("expected error for JPEG bytes declared as PNG, got nil")
+	}
+	if !strings.Contains(err.Error(), "magic bytes") {
+		test.Errorf("expected magic bytes error, got: %v", err)
+	}
+}
+
+// TestValidateAndDecodeImage_WebPMagicMismatch checks that a WebP-declared image with valid RIFF
+// but invalid WEBP marker at offset 8 is rejected.
+func TestValidateAndDecodeImage_WebPMagicMismatch(test *testing.T) {
+	// Build data with RIFF header but wrong marker at offset 8-12.
+	data := make([]byte, 20)
+	copy(data[0:4], []byte("RIFF"))
+	copy(data[8:12], []byte("XXXX")) // wrong marker, not "WEBP"
+	encoded := base64.StdEncoding.EncodeToString(data)
+	_, err := security.ValidateAndDecodeImage(encoded, "image/webp", 1024*1024)
+	if err == nil {
+		test.Error("expected error for WebP with wrong marker, got nil")
+	}
+	if !strings.Contains(err.Error(), "magic bytes") {
+		test.Errorf("expected magic bytes error, got: %v", err)
+	}
+}
+
 // TestValidateTaskDescription_Valid checks that a normal description passes.
 func TestValidateTaskDescription_Valid(test *testing.T) {
 	err := security.ValidateTaskDescription("Generate a high-quality banana image")

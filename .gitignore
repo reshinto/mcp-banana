@@ -21,6 +21,10 @@ Thumbs.db
 
 # Test coverage
 coverage.out
+coverage.html
+
+# Claude local settings
+.claude/settings.local.json
 
 # Superpowers
 .superpowers

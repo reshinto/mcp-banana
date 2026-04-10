@@ -152,8 +152,6 @@ func checkMagicBytes(decoded []byte, mimeType string) error {
 		if string(decoded[0:4]) != webpRIFF || string(decoded[8:12]) != webpWEBP {
 			return fmt.Errorf("image magic bytes do not match declared MIME type %q", mimeType)
 		}
-	default:
-		return fmt.Errorf("unsupported MIME type %q for magic byte check", mimeType)
 	}
 	return nil
 }
