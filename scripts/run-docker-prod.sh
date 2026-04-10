@@ -59,9 +59,35 @@ fi
 # Check TLS cert existence
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 if [ ! -d "$CERT_DIR" ]; then
+  echo "" >&2
   echo "WARNING: TLS certificate directory not found at $CERT_DIR" >&2
-  echo "  Generate certs with: certbot certonly --manual --preferred-challenges dns -d ${DOMAIN}" >&2
-  echo "  Continuing without TLS verification..." >&2
+  echo "" >&2
+  echo "  TLS certificates are required for HTTPS in production. Without them," >&2
+  echo "  the server cannot serve HTTPS and Claude Desktop OAuth will not work." >&2
+  echo "" >&2
+  echo "  To generate free TLS certificates using Let's Encrypt:" >&2
+  echo "" >&2
+  echo "  1. Install certbot on your server:" >&2
+  echo "       sudo apt-get install -y certbot" >&2
+  echo "" >&2
+  echo "  2. Run certbot with the DNS challenge (no port 80/443 needed):" >&2
+  echo "       sudo certbot certonly --manual --preferred-challenges dns -d ${DOMAIN}" >&2
+  echo "" >&2
+  echo "  3. Certbot will ask you to create a DNS TXT record:" >&2
+  echo "       _acme-challenge.${DOMAIN} → <value-certbot-shows>" >&2
+  echo "     Add this TXT record in your domain registrar, wait 1-2 minutes," >&2
+  echo "     then press Enter in certbot." >&2
+  echo "" >&2
+  echo "  4. Verify the certs were created:" >&2
+  echo "       sudo ls /etc/letsencrypt/live/${DOMAIN}/" >&2
+  echo "     You should see: fullchain.pem  privkey.pem  cert.pem  chain.pem" >&2
+  echo "" >&2
+  echo "  5. Re-run this script after generating the certificates." >&2
+  echo "" >&2
+  echo "  If you are running this locally (not on the production server)," >&2
+  echo "  this warning is expected — TLS certs only exist on the server." >&2
+  echo "  Use ./scripts/run-docker-dev.sh for local development instead." >&2
+  echo "" >&2
 fi
 
 echo "Building and starting mcp-banana (production mode, 0.0.0.0:8847, domain: ${DOMAIN})..."
