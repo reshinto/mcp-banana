@@ -3,4 +3,4 @@ services:
     ports:
       - "0.0.0.0:8847:8847"
     volumes:
-      - /etc/letsencrypt/live/banana.terencekong.net:/certs:ro
+      - /etc/letsencrypt/live/mcp.terencekong.net:/certs:ro
