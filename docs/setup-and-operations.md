@@ -1,15 +1,56 @@
 # Setup and Operations
 
+This guide covers all three deployment modes for mcp-banana. Follow one section top-to-bottom without skipping steps.
+
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Mode 1 — Local (stdio)](#mode-1--local-stdio)
+3. [Mode 2 — Docker Dev (HTTP, localhost)](#mode-2--docker-dev-http-localhost)
+4. [Mode 3 — Docker Prod (HTTP, public IP, TLS, OAuth)](#mode-3--docker-prod-http-public-ip-tls-oauth)
+5. [Environment Variable Reference](#environment-variable-reference)
+6. [Per-user Gemini API Keys](#per-user-gemini-api-keys)
+7. [Token Generation and Rotation](#token-generation-and-rotation)
+8. [Docker Operations](#docker-operations)
+9. [Health Check](#health-check)
+10. [Makefile Targets](#makefile-targets)
+11. [CI Pipeline](#ci-pipeline)
+12. [Logs and Monitoring](#logs-and-monitoring)
+
+---
+
 ## Prerequisites
+
+### All modes
 
 | Tool | Version | Purpose |
 |---|---|---|
-| Go | 1.26 or later | Build from source |
-| golangci-lint | v2.11.4 or later | Code linting (development) |
-| Docker | 20.10+ recommended | Container deployment |
-| Docker Compose | v2 (plugin) or v1 (standalone) | Multi-container deployment |
-| OpenSSL | Any | Generating auth tokens |
-| SSH | Any | Remote deployment access |
+| Git | Any | Clone the repository |
+| Gemini API key | — | Image generation via Google AI Studio |
+
+Get a Gemini API key at [https://aistudio.google.com/](https://aistudio.google.com/). Sign in, click **Get API Key**, and create a key. The key starts with `AIza`.
+
+### Mode 1 (Local)
+
+| Tool | Version | Purpose |
+|---|---|---|
+| Go | 1.25 or later | Build the binary |
+
+### Mode 2 and Mode 3 (Docker)
+
+| Tool | Version | Purpose |
+|---|---|---|
+| Docker | 20.10+ | Container runtime |
+| Docker Compose | v2 plugin or v1 standalone | Multi-container orchestration |
+
+### Development tools (optional)
+
+| Tool | Version | Purpose |
+|---|---|---|
+| golangci-lint | v2.11.4 or later | Code linting |
+| OpenSSL | Any | Token generation |
 
 Install golangci-lint:
 
@@ -17,175 +58,138 @@ Install golangci-lint:
 go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.4
 ```
 
-## Local Development Setup
+---
 
-**Step 1: Get a Gemini API key**
+## Mode 1 — Local (stdio)
 
-Visit [https://aistudio.google.com/](https://aistudio.google.com/), sign in, and create an API key. The key starts with `AIza`.
+Run the binary directly on your machine. Claude Code communicates with it over stdin/stdout. No network port is opened.
 
-**Step 2: Clone and build**
+**1. Clone the repository.**
 
 ```bash
 git clone https://github.com/reshinto/mcp-banana.git
 cd mcp-banana
-make build
 ```
 
-**Step 3: Set environment variables**
-
-```bash
-export GEMINI_API_KEY="AIza..."
-```
-
-**Step 4: Replace sentinel model IDs**
-
-Before the server can start, the model IDs in `internal/gemini/registry.go` must be verified. See [models.md](models.md) for the procedure.
-
-**Step 5: Run and verify**
-
-```bash
-make run-stdio
-# or: ./mcp-banana --transport stdio
-```
-
-Run the quality gate before committing any changes:
-
-```bash
-make quality-gate
-```
-
-## Configuration Reference
-
-All configuration is loaded from environment variables at startup. Missing required variables or malformed optional values cause an immediate exit with a descriptive error.
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GEMINI_API_KEY` | Yes | - | Gemini API key; registered as a secret |
-| `MCP_AUTH_TOKEN` | No | - | Single bearer token for HTTP auth; registered as a secret |
-| `MCP_AUTH_TOKENS_FILE` | No | - | Path to a file with one token per line; hot-reloaded on every request |
-| `MCP_LOG_LEVEL` | No | `info` | One of: `debug`, `info`, `warn`, `error` |
-| `MCP_RATE_LIMIT` | No | `30` | Positive integer; requests per minute |
-| `MCP_GLOBAL_CONCURRENCY` | No | `8` | Positive integer; max simultaneous in-flight requests |
-| `MCP_PRO_CONCURRENCY` | No | `3` | Positive integer; must be <= `MCP_GLOBAL_CONCURRENCY` |
-| `MCP_MAX_IMAGE_BYTES` | No | `4194304` | Positive integer; decoded image size limit in bytes (default 4 MB) |
-| `MCP_REQUEST_TIMEOUT_SECS` | No | `120` | Positive integer; per-call Gemini API timeout in seconds |
-
-`MCP_PRO_CONCURRENCY` must be <= `MCP_GLOBAL_CONCURRENCY`. The server exits at startup if this is violated.
-
-Copy the env template:
+**2. Create and populate `.env`.**
 
 ```bash
 cp .env.example .env
-# Edit .env with your actual values
 ```
 
-The `.env` file is listed in `.gitignore` and must never be committed.
+Open `.env` and set your Gemini API key:
 
-See [authentication.md](authentication.md) for how `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` work.
+```
+GEMINI_API_KEY=AIza...
+```
 
-## OAuth and TLS Setup
+All other variables in `.env` are optional for this mode.
 
-This section covers the additional configuration required for OAuth 2.1 support (Claude Desktop integration). Skip this section if you are using bearer token authentication only.
-
-### Subdomain DNS Setup
-
-OAuth requires HTTPS, which requires a public domain name. Create an A record pointing your subdomain to your server's IP address:
-
-| Type | Name | Value |
-|---|---|---|
-| A | `banana` | `<your-droplet-ip>` |
-
-This makes `banana.yourdomain.com` resolve to your server. DNS propagation typically takes a few minutes to a few hours.
-
-Verify propagation:
+**3. Build and start the server.**
 
 ```bash
-dig banana.yourdomain.com
-# Should return your droplet's IP address
+./scripts/run-local.sh
 ```
 
-### TLS Certificate Generation
+The script loads `.env`, builds the binary with `make build`, and starts it in stdio mode. The server is now waiting for MCP requests on stdin.
 
-Use `certbot` to obtain a free Let's Encrypt certificate. The `--manual --preferred-challenges dns` method works without running a web server:
+**4. Connect Claude Code.**
+
+In a separate terminal (or after the server is registered), run:
 
 ```bash
-certbot certonly --manual --preferred-challenges dns -d banana.yourdomain.com
+claude mcp add-json --scope user banana \
+  '{"command":"./mcp-banana","args":["--transport","stdio"],"env":{"GEMINI_API_KEY":"AIza..."},"type":"stdio"}'
 ```
 
-`certbot` prompts you to add a `_acme-challenge` DNS TXT record to prove domain ownership. Add the record in your DNS provider, wait for propagation, then press Enter. The certificate files are written to `/etc/letsencrypt/live/banana.yourdomain.com/`.
+Replace `AIza...` with your actual key. The `command` path must be the absolute path to the binary if you call this from a different directory — or navigate to the repo root first.
 
-Renew the certificate before it expires (Let's Encrypt certificates are valid for 90 days):
+**5. Test.**
+
+Open a new Claude Code session and ask Claude to generate an image:
+
+```
+Generate a photo-realistic image of a red panda sitting on a bamboo branch.
+```
+
+Claude routes the request through the MCP tool. A successful response includes the generated image inline.
+
+---
+
+## Mode 2 — Docker Dev (HTTP, localhost)
+
+Run the server in Docker, bound to `127.0.0.1:8847`. Only processes on the same machine can reach it. Use this for local testing of the HTTP transport without exposing anything to the internet.
+
+**1. Clone the repository.**
 
 ```bash
-certbot renew --manual --preferred-challenges dns
+git clone https://github.com/reshinto/mcp-banana.git
+cd mcp-banana
 ```
 
-### OAuth Provider Credential Setup
-
-Register your server as an OAuth application with each provider you want to support.
-
-**Google** — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
-
-Create an OAuth 2.0 Client ID. Set the authorized redirect URI to:
-`https://banana.yourdomain.com:8847/callback`
-
-**GitHub** — [github.com/settings/developers](https://github.com/settings/developers)
-
-Create a new OAuth App. Set the authorization callback URL to:
-`https://banana.yourdomain.com:8847/callback`
-
-**Apple** — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
-
-Register a Services ID. Set the return URL to:
-`https://banana.yourdomain.com:8847/callback`
-
-Add the credentials to `.env`:
+**2. Create and populate `.env`.**
 
 ```bash
-OAUTH_BASE_URL=https://banana.yourdomain.com:8847
-
-OAUTH_GOOGLE_CLIENT_ID=<your-client-id>
-OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
-
-OAUTH_GITHUB_CLIENT_ID=<your-client-id>
-OAUTH_GITHUB_CLIENT_SECRET=<your-client-secret>
+cp .env.example .env
 ```
 
-Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the OAuth login page. You do not need to configure all providers.
+Set the required variables:
 
-### Docker Volume Mount for Certificates
-
-Mount the Let's Encrypt certificate directory into the container by uncommenting the `volumes` block in `docker-compose.yml`:
-
-```yaml
-services:
-  mcp-banana:
-    env_file:
-      - .env
-    volumes:
-      - /etc/letsencrypt/live/banana.yourdomain.com:/certs:ro
+```
+GEMINI_API_KEY=AIza...
+MCP_AUTH_TOKEN=<your-token>
 ```
 
-Then set the certificate paths in `.env`:
+Generate a token if you do not have one:
 
 ```bash
-MCP_TLS_CERT_FILE=/certs/fullchain.pem
-MCP_TLS_KEY_FILE=/certs/privkey.pem
+openssl rand -hex 32
 ```
 
-The `:ro` mount flag makes the certificate files read-only inside the container. Restart the container after updating `docker-compose.yml`:
+**3. Start the server.**
 
 ```bash
-docker compose up -d --force-recreate
+./scripts/run-docker-dev.sh
 ```
 
-## Production Deployment (Docker)
+The script checks for `.env`, then runs `docker compose up -d --build`. The container builds from the local `Dockerfile`, binds to `127.0.0.1:8847`, and restarts automatically on failure.
 
-**Step 1: Provision a server**
+**4. Verify the server is up.**
 
-Create a server (Ubuntu 22.04 LTS recommended, 1 GB RAM minimum) with SSH key authentication.
+```bash
+curl http://127.0.0.1:8847/healthz
+```
 
-**Step 2: Install Docker**
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+**5. Connect Claude Code.**
+
+```bash
+claude mcp add-json --scope user banana \
+  '{"type":"http","url":"http://127.0.0.1:8847/mcp","headers":{"Authorization":"Bearer <your-token>"}}'
+```
+
+Replace `<your-token>` with the value you set for `MCP_AUTH_TOKEN`.
+
+**6. Test.**
+
+Open a new Claude Code session and ask Claude to generate an image.
+
+---
+
+## Mode 3 — Docker Prod (HTTP, public IP, TLS, OAuth)
+
+Run the server on a public-facing host with TLS termination and optional OAuth 2.1 for Claude Desktop integration. The reference domain in this guide is `mcp.terencekong.net` — substitute your own domain throughout.
+
+### Step 1 — Provision a server
+
+Create an Ubuntu 22.04 LTS server (1 GB RAM minimum) with SSH key authentication. Note the server's public IP address.
+
+Install Docker:
 
 ```bash
 ssh root@<server-ip>
@@ -193,151 +197,345 @@ apt-get update && apt-get install -y docker.io docker-compose-plugin
 systemctl enable docker && systemctl start docker
 ```
 
-**Step 3: Create a deploy user**
+Create a deploy user:
 
 ```bash
 adduser deploy
 usermod -aG docker deploy
-# Add your SSH public key to /home/deploy/.ssh/authorized_keys
+# Append your SSH public key to /home/deploy/.ssh/authorized_keys
 ```
 
-**Step 4: Clone the repository**
+### Step 2 — Configure DNS
+
+Create an A record pointing your subdomain to the server's IP:
+
+| Type | Name | Value |
+|---|---|---|
+| A | `mcp` (or your subdomain) | `<server-ip>` |
+
+This makes `mcp.terencekong.net` resolve to your server. Verify propagation before proceeding:
+
+```bash
+dig mcp.terencekong.net
+# Should return your server's IP
+```
+
+### Step 3 — Obtain a TLS certificate
+
+Use `certbot` with the DNS challenge. This method works without running a web server first:
+
+```bash
+certbot certonly --manual --preferred-challenges dns -d mcp.terencekong.net
+```
+
+`certbot` prompts you to add a `_acme-challenge` TXT record in your DNS provider. Add the record, wait for propagation, then press Enter. Certificates are written to `/etc/letsencrypt/live/mcp.terencekong.net/`.
+
+Renew certificates before they expire (Let's Encrypt certificates are valid for 90 days):
+
+```bash
+certbot renew --manual --preferred-challenges dns
+```
+
+### Step 4 — Clone and configure
 
 ```bash
 sudo git clone https://github.com/reshinto/mcp-banana.git /opt/mcp-banana
 sudo chown -R deploy:deploy /opt/mcp-banana
-```
-
-**Step 5: Configure environment**
-
-```bash
 cd /opt/mcp-banana
 cp .env.example .env
-nano .env
-# Set at minimum: GEMINI_API_KEY and MCP_AUTH_TOKEN
 ```
 
-Docker Compose reads `.env` via `env_file: .env` in `docker-compose.yml` and injects all variables into the container. The `.env` file is not tracked by git, so `git pull` will not overwrite it.
+Edit `.env` with the minimum required values for production:
 
-**Step 6: Verify model IDs**
+```
+GEMINI_API_KEY=AIza...
+MCP_AUTH_TOKEN=<your-token>
 
-See [models.md](models.md) to replace sentinel IDs before deploying.
+MCP_TLS_CERT_FILE=/certs/fullchain.pem
+MCP_TLS_KEY_FILE=/certs/privkey.pem
+```
 
-**Step 7: Build and start**
+The `docker-compose.prod.yml` overlay mounts `/etc/letsencrypt/live/mcp.terencekong.net` into the container at `/certs`. The paths above match that mount.
+
+### Step 5 — Configure OAuth (optional)
+
+OAuth enables Claude Desktop to authenticate users through Google, GitHub, or Apple. Skip this step if you only need bearer token auth.
+
+**Register your app with each provider.**
+
+Google — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+
+Create an OAuth 2.0 Client ID. Set the authorized redirect URI to:
+`https://mcp.terencekong.net:8847/callback`
+
+GitHub — [github.com/settings/developers](https://github.com/settings/developers)
+
+Create a new OAuth App. Set the authorization callback URL to:
+`https://mcp.terencekong.net:8847/callback`
+
+Apple — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
+
+Register a Services ID. Set the return URL to:
+`https://mcp.terencekong.net:8847/callback`
+
+**Add credentials to `.env`:**
+
+```
+OAUTH_BASE_URL=https://mcp.terencekong.net:8847
+
+OAUTH_GOOGLE_CLIENT_ID=<client-id>
+OAUTH_GOOGLE_CLIENT_SECRET=<client-secret>
+
+OAUTH_GITHUB_CLIENT_ID=<client-id>
+OAUTH_GITHUB_CLIENT_SECRET=<client-secret>
+```
+
+Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the OAuth login page. You do not need to configure all three.
+
+### Step 6 — Start the server
 
 ```bash
-docker compose up -d --build
+./scripts/run-docker-prod.sh
 ```
 
-> **Docker Compose V1 (Docker < 20.10):** If you see `unknown shorthand flag: 'd' in -d`, your Docker version does not include the Compose V2 plugin. Use the standalone `docker-compose` (hyphenated) binary instead:
->
-> ```bash
-> docker-compose up -d --build
-> ```
->
-> All `docker compose` commands in this guide should be replaced with `docker-compose` when using V1.
+The script merges `docker-compose.yml` with `docker-compose.prod.yml` (which overrides the port binding to `0.0.0.0:8847` and mounts the TLS certificate directory), then runs `docker compose up -d --build`.
 
-The container:
-- Runs in HTTP mode on `0.0.0.0:8847` inside the container
-- Binds to the host address configured in the `ports` section of `docker-compose.yml` (see below)
-- Restarts automatically on failure (`restart: unless-stopped`)
-- Has a 120-second graceful shutdown period (`stop_grace_period: 120s`)
-- Is limited to 768 MB of memory
-
-### Port Binding: Loopback vs Public
-
-The `ports` field in `docker-compose.yml` controls which network interfaces accept connections. Choose the mode that matches your deployment:
-
-| Mode | `ports` value | Accessible from | Use when |
-|---|---|---|---|
-| **Loopback** (default) | `"127.0.0.1:8847:8847"` | Localhost only | Accessing via SSH tunnel; most secure |
-| **Public** | `"0.0.0.0:8847:8847"` | Any network interface | Direct remote access without SSH tunnel |
-
-**Loopback mode** (`127.0.0.1`) is the safer default. The port is only reachable from the server itself, so remote clients must connect through an SSH tunnel (see [authentication.md](authentication.md)). This prevents unauthorized access even if `MCP_AUTH_TOKEN` is not set.
-
-**Public mode** (`0.0.0.0`) exposes the port to all network interfaces, allowing direct connections from any machine that can reach the server's IP. This is simpler to set up but requires `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS_FILE` to be configured in `.env` — without authentication, anyone on the network can call the MCP endpoint.
-
-To switch between modes, edit `docker-compose.yml`:
-
-```yaml
-ports:
-  # Loopback only (SSH tunnel required for remote access)
-  - "127.0.0.1:8847:8847"
-
-  # Public (direct remote access, requires MCP_AUTH_TOKEN)
-  # - "0.0.0.0:8847:8847"
-```
-
-After changing, rebuild:
+### Step 7 — Verify
 
 ```bash
-docker compose up -d --build --force-recreate
+curl -k https://mcp.terencekong.net:8847/healthz
 ```
 
-**Step 8: Verify health**
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### Step 8 — Connect Claude Code
 
 ```bash
-curl http://localhost:8847/healthz
-# Expected: {"status":"ok"}
-docker compose ps
+claude mcp add-json --scope user banana \
+  '{"type":"http","url":"https://mcp.terencekong.net:8847/mcp","headers":{"Authorization":"Bearer <your-token>"}}'
 ```
 
-If the container shows `unhealthy`, check logs:
+### Step 9 — Connect Claude Desktop
 
-```bash
-docker compose logs mcp-banana
-```
+Open Claude Desktop, go to **Customize > Connectors**, and add a new connector with URL `https://mcp.terencekong.net:8847/mcp`. If OAuth is configured, Claude Desktop uses the OAuth flow to authenticate.
 
-If the container shows startup errors, see [troubleshooting.md](troubleshooting.md) for common problems and fixes.
-
-### Updating Production
+### Updating production
 
 ```bash
 ssh deploy@<server-ip>
 cd /opt/mcp-banana
 git pull origin main
-docker compose up -d --build --force-recreate
-curl http://127.0.0.1:8847/healthz
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+curl -k https://mcp.terencekong.net:8847/healthz
 ```
 
 Roll back if the new version fails:
 
 ```bash
 git checkout <previous-commit-sha>
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --force-recreate
+```
+
+---
+
+## Environment Variable Reference
+
+All variables are loaded from `.env` at startup. The server exits immediately with a descriptive error if a required variable is missing or a constraint is violated.
+
+| Variable | Required | Default | Type | Description |
+|---|---|---|---|---|
+| `GEMINI_API_KEY` | Yes | — | string | Google Gemini API key. Starts with `AIza`. Registered as a secret — redacted from all logs and error output. |
+| `MCP_AUTH_TOKEN` | No | — | string | Single bearer token for HTTP authentication. Every HTTP request must include `Authorization: Bearer <token>`. Generate with `openssl rand -hex 32`. Not used in stdio mode. |
+| `MCP_AUTH_TOKENS_FILE` | No | — | path | Path to a file containing bearer tokens, one per line. Lines starting with `#` and empty lines are ignored. Hot-reloaded on every request — add or remove tokens without restarting. If both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` are set, a request matching either is accepted. |
+| `MCP_LOG_LEVEL` | No | `info` | enum | Log verbosity. One of: `debug`, `info`, `warn`, `error`. Logs are JSON-formatted and written to stderr. |
+| `MCP_RATE_LIMIT` | No | `30` | int | Maximum requests per minute across all models. Must be a positive integer. |
+| `MCP_GLOBAL_CONCURRENCY` | No | `8` | int | Maximum simultaneous in-flight requests across all models. Must be a positive integer. |
+| `MCP_PRO_CONCURRENCY` | No | `3` | int | Maximum simultaneous requests for the Pro model (`nano-banana-pro`). Must be a positive integer and must be `<=` `MCP_GLOBAL_CONCURRENCY`. The server exits at startup if this constraint is violated. |
+| `MCP_MAX_IMAGE_BYTES` | No | `4194304` | int | Maximum decoded image size in bytes for the `edit_image` tool. Default is 4 MB. Must be a positive integer. |
+| `MCP_REQUEST_TIMEOUT_SECS` | No | `120` | int | Per-call timeout for Gemini API requests in seconds. The Pro model can take 15–45 seconds. Set this higher than the slowest expected response. Must be a positive integer. |
+| `MCP_TLS_CERT_FILE` | No | — | path | Path to TLS certificate file (PEM format). Both `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` must be set together. When set, the server serves HTTPS. |
+| `MCP_TLS_KEY_FILE` | No | — | path | Path to TLS private key file (PEM format). Must be set together with `MCP_TLS_CERT_FILE`. |
+| `OAUTH_BASE_URL` | No | — | URL | Base URL for OAuth endpoints. Must be HTTPS in production. Example: `https://mcp.terencekong.net:8847`. Required when any OAuth provider is configured. |
+| `OAUTH_GOOGLE_CLIENT_ID` | No | — | string | Google OAuth 2.0 client ID. |
+| `OAUTH_GOOGLE_CLIENT_SECRET` | No | — | string | Google OAuth 2.0 client secret. Registered as a secret. |
+| `OAUTH_GITHUB_CLIENT_ID` | No | — | string | GitHub OAuth App client ID. |
+| `OAUTH_GITHUB_CLIENT_SECRET` | No | — | string | GitHub OAuth App client secret. Registered as a secret. |
+| `OAUTH_APPLE_CLIENT_ID` | No | — | string | Apple Sign In Services ID. |
+| `OAUTH_APPLE_CLIENT_SECRET` | No | — | string | Apple Sign In client secret. Registered as a secret. |
+
+The `.env` file is listed in `.gitignore` and must never be committed.
+
+---
+
+## Per-user Gemini API Keys
+
+HTTP clients can supply their own Gemini API key on a per-request basis. Send the key in the `X-Gemini-API-Key` request header:
+
+```
+X-Gemini-API-Key: AIza...
+```
+
+The server uses the per-request key for that call and falls back to the server-level `GEMINI_API_KEY` when the header is absent. This lets multiple users share a single deployment while billing against their own Google AI accounts.
+
+Example with curl:
+
+```bash
+curl -X POST https://mcp.terencekong.net:8847/mcp \
+  -H "Authorization: Bearer <your-token>" \
+  -H "X-Gemini-API-Key: AIza..." \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"generate_image","arguments":{"prompt":"a cat"}}}'
+```
+
+---
+
+## Token Generation and Rotation
+
+**Generate a new token:**
+
+```bash
+openssl rand -hex 32
+```
+
+**Rotate the token with guided instructions:**
+
+```bash
+make rotate-token
+```
+
+This prints a new random token and step-by-step instructions for updating the server's `.env` and your Claude Code configuration.
+
+**Manual rotation steps:**
+
+1. Generate a new token: `openssl rand -hex 32`
+2. SSH into the server and update `MCP_AUTH_TOKEN` in `/opt/mcp-banana/.env`
+3. Restart the server: `docker compose restart`
+4. Update your Claude Code MCP config with the new token:
+   ```bash
+   claude mcp add-json --scope user banana \
+     '{"type":"http","url":"http://127.0.0.1:8847/mcp","headers":{"Authorization":"Bearer <new-token>"}}'
+   ```
+
+---
+
+## Docker Operations
+
+All commands below use the base `docker-compose.yml`. For production, append `-f docker-compose.yml -f docker-compose.prod.yml` to every `docker compose` command.
+
+**View logs (follow mode):**
+
+```bash
+docker compose logs -f mcp-banana
+```
+
+**Stop the server:**
+
+```bash
+docker compose down
+```
+
+**Restart without rebuilding:**
+
+```bash
+docker compose restart
+```
+
+**Rebuild and restart:**
+
+```bash
 docker compose up -d --build --force-recreate
 ```
 
-## CI Pipeline
-
-CI runs automatically via GitHub Actions (`.github/workflows/ci.yml`) on pushes to `main`, `feat/**`, `fix/**`, `chore/**` branches and on pull requests to `main`.
-
-Steps:
-
-1. `golangci-lint run` (5-minute timeout)
-2. `gofmt -l .` format check
-3. `go vet ./...` static analysis
-4. `go test -coverprofile=coverage.out -race ./...` with 80% coverage threshold
-5. Binary build (`CGO_ENABLED=0`, `-ldflags="-s -w"`, `-trimpath`)
-6. Binary size check (15 MB limit)
-7. Docker image build
-8. Docker image size check (25 MB limit)
-
-Deployment to production is manual via SSH -- there is no automated CD pipeline.
-
-## Monitoring
-
-### Health Endpoint
+**Check container status:**
 
 ```bash
-curl http://localhost:8847/healthz
-# Returns {"status":"ok"} with HTTP 200
+docker compose ps
 ```
 
-The container runs an internal health check every 30 seconds. After 3 consecutive failures, Docker marks the container `unhealthy`.
+**View resource usage:**
 
-### Logs
+```bash
+docker stats mcp-banana
+```
 
-Logs are written as JSON to stderr, captured by Docker's `json-file` driver (10 MB cap, 3 files of rotation):
+**Docker Compose V1 note:** If you see `unknown shorthand flag: 'd' in -d`, your Docker version does not include the Compose V2 plugin. Replace `docker compose` (with a space) with `docker-compose` (with a hyphen) in every command.
+
+---
+
+## Health Check
+
+The `/healthz` endpoint returns HTTP 200 with `{"status":"ok"}` when the server is running.
+
+```bash
+# Dev mode (HTTP)
+curl http://127.0.0.1:8847/healthz
+
+# Prod mode (HTTPS)
+curl https://mcp.terencekong.net:8847/healthz
+```
+
+Docker runs an internal health check every 30 seconds. After 3 consecutive failures, Docker marks the container `unhealthy`. Check the status:
+
+```bash
+docker compose ps
+```
+
+If the container shows `unhealthy`, inspect logs:
+
+```bash
+docker compose logs mcp-banana
+```
+
+---
+
+## Makefile Targets
+
+| Target | Description |
+|---|---|
+| `make build` | Compile the binary to `./mcp-banana` with stripped debug info |
+| `make test` | Run all tests with race detector and coverage output |
+| `make lint` | Run `golangci-lint` |
+| `make fmt` | Format all Go source files with `gofmt` |
+| `make fmt-check` | Check formatting without modifying files (used in CI) |
+| `make vet` | Run `go vet ./...` |
+| `make run-stdio` | Build and run in stdio mode |
+| `make run-http` | Build and run in HTTP mode on `0.0.0.0:8847` |
+| `make clean` | Remove the binary and coverage output |
+| `make rotate-token` | Generate a new auth token and print rotation instructions |
+| `make quality-gate` | Run the full CI sequence: lint → fmt-check → vet → test |
+
+---
+
+## CI Pipeline
+
+CI runs automatically via GitHub Actions on pushes to `main`, `feat/**`, `fix/**`, `chore/**` branches and on pull requests to `main`.
+
+| Step | Command |
+|---|---|
+| Lint | `golangci-lint run` |
+| Format check | `gofmt -l .` |
+| Static analysis | `go vet ./...` |
+| Tests | `go test -coverprofile=coverage.out -race ./...` (80% coverage threshold) |
+| Build | `go build ./cmd/mcp-banana/` |
+| Binary size check | 15 MB limit |
+| Docker image build | — |
+| Docker image size check | 25 MB limit |
+
+Run the same sequence locally before opening a PR:
+
+```bash
+make quality-gate
+```
+
+---
+
+## Logs and Monitoring
+
+Logs are written as JSON to stderr and captured by Docker's `json-file` driver (10 MB per file, 3 files rotation):
 
 ```bash
 docker compose logs -f mcp-banana
@@ -345,23 +543,9 @@ docker compose logs -f mcp-banana
 
 | Level | When |
 |---|---|
-| `debug` | Detailed request tracing (development only) |
+| `debug` | Detailed request tracing — development only |
 | `info` | Normal startup and request events (default) |
 | `warn` | Unexpected but recoverable conditions |
 | `error` | Failures requiring attention |
 
 Set `MCP_LOG_LEVEL=debug` temporarily to diagnose issues. Revert to `info` for production.
-
-### Token Rotation
-
-```bash
-make rotate-token
-```
-
-Generates a new random token and prints step-by-step instructions for updating the server and your Claude Code configuration.
-
-## End-to-End Request Flow
-
-For a detailed walkthrough of the middleware chain, request lifecycle, and security boundaries, see [architecture.md](architecture.md).
-
-**Summary:** Claude Code sends a JSON-RPC `tools/call` request (via stdio or HTTP). In HTTP mode, the request passes through middleware (auth, rate limiting, concurrency, body size). The tool handler validates input via `internal/security/`, calls the Gemini API via `internal/gemini/`, and returns a sanitized result. Errors are mapped to safe codes before reaching Claude Code — see [security.md](security.md) for the error mapping boundary.

@@ -15,7 +15,9 @@ mcp-banana integrates with Claude Code as an MCP server. Claude Code communicate
 
 The repository includes a `.mcp.json` with a project-scoped stdio configuration. Each developer supplies their own `GEMINI_API_KEY` via user-scoped config or environment variable.
 
-## Option A: Local Stdio Mode (Recommended for Development)
+---
+
+## Option A: Local Stdio Mode (Development)
 
 Stdio mode runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
 
@@ -25,16 +27,14 @@ Stdio mode runs `mcp-banana` as a subprocess of Claude Code. Communication happe
 
 ```bash
 claude mcp add-json --scope user banana '{
-  "command": "/usr/local/bin/mcp-banana",
+  "command": "./mcp-banana",
   "args": ["--transport", "stdio"],
-  "env": {
-    "GEMINI_API_KEY": "<your-gemini-api-key>"
-  },
+  "env": {"GEMINI_API_KEY": "<your-key>"},
   "type": "stdio"
 }'
 ```
 
-Replace `/usr/local/bin/mcp-banana` with the actual path to your built binary. The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
+Replace `./mcp-banana` with the absolute path to your built binary if it is not in the current directory (e.g., `/usr/local/bin/mcp-banana`). The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
 
 ### Project-Scoped Setup (No Secrets, Committed to Repo)
 
@@ -48,37 +48,44 @@ claude mcp add-json --scope project banana '{
 
 This configuration is saved to `.mcp.json` and is already committed in this repository. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on `PATH`.
 
-## Option B: Remote HTTP Mode (For a Deployed Server)
+---
 
-HTTP mode connects Claude Code to a running mcp-banana server over the network. Every request requires a bearer token in the `Authorization` header.
+## Option B: HTTP Mode (Docker Dev or Remote)
 
-For auth setup details (SSH tunnel, single token, or per-user tokens), see [authentication.md](authentication.md).
+HTTP mode connects Claude Code to a running mcp-banana server over the network. Every request requires a bearer token in the `Authorization` header (unless the server is configured for no-auth SSH tunnel mode — see [authentication.md](authentication.md)).
 
 ### Basic HTTP Connection
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://<server-ip>:8847/mcp",
+  "url": "http://127.0.0.1:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>"
+    "Authorization": "Bearer <your-token>"
   }
 }'
 ```
 
-### SSH Tunnel (Recommended for Production)
+Replace `127.0.0.1:8847` with the actual server address. When using an SSH tunnel, keep `127.0.0.1:8847` as the URL and let the tunnel handle routing (see [authentication.md — Option 1: SSH Tunnel](authentication.md) for setup instructions).
 
-The server binds to `127.0.0.1:8847` inside Docker (not publicly exposed). Set up an SSH tunnel first (see [authentication.md - Option 1: SSH Tunnel](authentication.md) for full instructions including autossh and SSH config), then connect using `localhost`:
+### HTTP Connection with Per-User Gemini Key
+
+If you want tool calls to use your personal Gemini API key instead of the server's shared key, add the `X-Gemini-API-Key` header:
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://localhost:8847/mcp",
+  "url": "http://127.0.0.1:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>"
+    "Authorization": "Bearer <your-token>",
+    "X-Gemini-API-Key": "<your-personal-gemini-key>"
   }
 }'
 ```
+
+The server registers the per-request key with the output sanitizer — it is never echoed back in tool responses or logs.
+
+---
 
 ## Option C: Claude Desktop GUI (OAuth)
 
@@ -88,7 +95,7 @@ OAuth 2.1 lets users connect Claude Desktop to a remote mcp-banana server throug
 
 - A public subdomain (e.g., `banana.yourdomain.com`) with an A record pointing to your server's IP
 - A TLS certificate for that subdomain (see [setup-and-operations.md](setup-and-operations.md) for `certbot` instructions)
-- OAuth credentials from at least one provider (Google, GitHub, or Apple) — see [authentication.md](authentication.md) for provider registration steps
+- OAuth credentials from at least one provider (Google, GitHub, or Apple) — see [authentication.md — Option 4: OAuth 2.1](authentication.md) for provider registration steps
 - `OAUTH_BASE_URL`, provider credentials, `MCP_TLS_CERT_FILE`, and `MCP_TLS_KEY_FILE` set in `.env`
 
 **Setup:**
@@ -129,13 +136,15 @@ curl https://banana.yourdomain.com:8847/healthz
 https://banana.yourdomain.com:8847/mcp
 ```
 
-6. Claude Desktop opens the OAuth login page. Click your provider and complete the sign-in flow.
+6. Claude Desktop fetches the OAuth discovery document at `/.well-known/oauth-authorization-server`, registers a client dynamically, and opens the login page at `/authorize`. Click your provider and complete the browser sign-in flow.
 
-After sign-in, Claude Desktop stores the OAuth tokens and handles token refresh automatically. You can start using the image generation tools immediately.
+After sign-in, Claude Desktop stores the OAuth access and refresh tokens and handles token refresh automatically (access tokens expire after 1 hour; refresh tokens after 30 days). You can start using the image generation tools immediately.
+
+---
 
 ## Verification
 
-After adding the server:
+After adding the server with any option above:
 
 ```bash
 claude mcp list
@@ -143,6 +152,17 @@ claude mcp get banana
 ```
 
 Both commands should show the `banana` server entry. If configured correctly and model IDs are verified, Claude Code will be able to call all four tools.
+
+### Example Prompts
+
+Once integrated, you can call the tools directly by asking Claude:
+
+- "List the available image generation models" — calls `list_models`
+- "What model do you recommend for a quick draft?" — calls `recommend_model`
+- "Generate an image of a sunset over the ocean" — calls `generate_image`
+- "Edit this image to make the sky more dramatic" — calls `edit_image` with a provided image
+
+---
 
 ## Scope Conflicts
 
@@ -161,27 +181,3 @@ claude mcp remove banana --scope user
 ```
 
 After removing the conflicting entry, verify with `claude mcp get banana`.
-
-## Troubleshooting
-
-| Symptom | Likely Cause | Fix |
-|---|---|---|
-| `claude mcp list` does not show `banana` | Server was not added | Re-run `claude mcp add-json` with the correct `--scope` |
-| `GEMINI_API_KEY is required` error on startup | API key not set | Add the `env` block to your user-scoped config or set the variable in your shell |
-| `registry validation failed: model "..." has unverified GeminiID` | Sentinel model IDs still present | Follow the verification procedure in [models.md](models.md) |
-| HTTP 401 Unauthorized | Wrong or missing auth token | Verify the token in your Claude Code config matches the server |
-| `Connection refused` on HTTP mode | SSH tunnel not running or server is down | Start the tunnel or check the server with `curl http://localhost:8847/healthz` |
-| Server starts but tools return errors | Gemini API issue or quota exceeded | Check `docker compose logs -f mcp-banana` on the remote server |
-| Binary not found | `mcp-banana` not on PATH | Use the full absolute path in `command`, or copy the binary to `/usr/local/bin/` |
-| `claude mcp get banana` shows wrong config (e.g. stdio instead of HTTP) | Duplicate `banana` entries in different scopes — project-scoped `.mcp.json` shadows user-scoped `~/.claude.json` | Remove the conflicting scope: `claude mcp remove banana --scope project` or `claude mcp remove banana --scope user` |
-
-See [troubleshooting.md](troubleshooting.md) for additional common issues and debugging steps.
-
-## Verifying Tool Access
-
-Once integrated, you can ask Claude Code to call the tools directly:
-
-- "List the available image generation models" (calls `list_models`)
-- "What model do you recommend for a quick draft?" (calls `recommend_model`)
-- "Generate an image of a sunset over the ocean" (calls `generate_image`)
-- "Edit this image to make the sky more dramatic" (calls `edit_image` with a provided image)

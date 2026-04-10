@@ -2,11 +2,11 @@
 
 ## Overview
 
-Authentication in HTTP mode is optional. Three approaches are available depending on your security needs.
+Authentication in HTTP mode is optional. Four approaches are available depending on your security needs.
 
 | Approach | When to use | Config needed |
 |---|---|---|
-| **SSH tunnel only** (no token) | Server reachable only via SSH tunnel | Nothing -- auth is skipped |
+| **No auth** | Server reachable only via SSH tunnel | Nothing — auth is skipped |
 | **Single shared token** | Solo developer or small trusted team | `MCP_AUTH_TOKEN` in `.env` |
 | **Per-user tokens file** | Multiple users, individual revocation | `MCP_AUTH_TOKENS_FILE` in `.env` |
 | **OAuth 2.1** | Claude Desktop GUI integration | `OAUTH_BASE_URL` + provider credentials in `.env` |
@@ -22,17 +22,18 @@ Client sends: Authorization: Bearer <token>
 Middleware checks (on every request):
   1. MCP_AUTH_TOKENS_FILE set? Read file from disk (hot-reload), check token. ALLOW if match.
   2. MCP_AUTH_TOKEN set? Check token against env var. ALLOW if match.
-  3. Neither set? Skip auth entirely (SSH tunnel mode). ALLOW all requests.
-  4. Auth configured but no match? 401 {"error":"unauthorized"}
+  3. OAuth store present? Validate as OAuth access token. ALLOW if valid and not expired.
+  4. Neither static auth configured? Skip auth entirely (SSH tunnel mode). ALLOW all requests.
+  5. Auth configured but no match? 401 {"error":"unauthorized"}
 ```
 
-`GET /healthz` is always exempt from token auth so Docker health checks work without credentials.
+`GET /healthz` is always exempt from auth so Docker health checks work without credentials.
 
 ---
 
 ## Option 1: SSH Tunnel Only (No Token)
 
-The server listens only on `127.0.0.1:8847` inside the container and is never exposed to the public internet. Each user creates an SSH tunnel from their local machine, forwarding their local port 8847 to the server's port 8847. The SSH key is the authentication -- no bearer token needed.
+The server is accessible only through an SSH tunnel. The SSH key is the authentication — no bearer token is needed.
 
 ### Admin Setup (one-time, on the server)
 
@@ -49,7 +50,7 @@ chmod 600 /home/alice/.ssh/authorized_keys
 chown -R alice:alice /home/alice/.ssh
 ```
 
-Leave both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty in `.env`. The server will log a warning at startup saying auth is disabled -- this is expected.
+Leave both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty in `.env`. The server will log a warning at startup — this is expected.
 
 ### User Setup
 
@@ -174,7 +175,7 @@ Add to `.env`:
 MCP_AUTH_TOKENS_FILE=/opt/mcp-banana/tokens.txt
 ```
 
-Restart once to pick up the new env var. After that, all token changes are hot-reloaded -- no restart needed.
+Restart once to pick up the new env var. After that, all token changes are hot-reloaded — no restart needed.
 
 ### User Setup
 
@@ -208,7 +209,7 @@ NEW_TOKEN=$(openssl rand -hex 32)
 echo "New token for Alice: $NEW_TOKEN"
 # Edit tokens.txt and replace Alice's old token line with the new one
 nano /opt/mcp-banana/tokens.txt
-# Share the new token with Alice -- she updates her Claude Code config
+# Share the new token with Alice — she updates her Claude Code config
 ```
 
 ### Viewing Active Tokens
@@ -223,7 +224,7 @@ grep -cv '^#\|^$' /opt/mcp-banana/tokens.txt
 
 ---
 
-## Option C: OAuth (Claude Desktop)
+## Option 4: OAuth 2.1 (Claude Desktop)
 
 OAuth 2.1 enables Claude Desktop users to authenticate via a browser sign-in flow instead of manually configuring a bearer token. The server acts as an OAuth authorization server, delegating identity verification to a third-party provider (Google, GitHub, or Apple).
 
@@ -235,7 +236,7 @@ OAuth 2.1 enables Claude Desktop users to authenticate via a browser sign-in flo
 | Credential management | Manual token distribution | Browser-based sign-in |
 | Transport | HTTP or SSH tunnel | HTTPS only |
 | Token lifetime | Until rotated | 1 hour (access), 30 days (refresh) |
-| PKCE required | No | Yes |
+| PKCE required | No | Yes (S256 only) |
 
 ### Prerequisites
 
@@ -248,7 +249,7 @@ OAuth 2.1 enables Claude Desktop users to authenticate via a browser sign-in flo
 **Google**
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and create an OAuth 2.0 Client ID.
-2. Set the authorized redirect URI to: `https://banana.yourdomain.com:8847/oauth/callback/google`
+2. Set the authorized redirect URI to: `https://banana.yourdomain.com:8847/callback`
 3. Copy the client ID and secret into `.env`:
 
 ```
@@ -259,7 +260,7 @@ OAUTH_GOOGLE_CLIENT_SECRET=<your-client-secret>
 **GitHub**
 
 1. Go to [GitHub Developer Settings](https://github.com/settings/developers) and create a new OAuth App.
-2. Set the authorization callback URL to: `https://banana.yourdomain.com:8847/oauth/callback/github`
+2. Set the authorization callback URL to: `https://banana.yourdomain.com:8847/callback`
 3. Copy the client ID and secret into `.env`:
 
 ```
@@ -270,7 +271,7 @@ OAUTH_GITHUB_CLIENT_SECRET=<your-client-secret>
 **Apple**
 
 1. Go to [Apple Developer — Identifiers](https://developer.apple.com/account/resources/identifiers) and register a Services ID.
-2. Set the return URL to: `https://banana.yourdomain.com:8847/oauth/callback/apple`
+2. Set the return URL to: `https://banana.yourdomain.com:8847/callback`
 3. Copy the client ID and secret into `.env`:
 
 ```
@@ -293,13 +294,37 @@ MCP_TLS_CERT_FILE=/certs/fullchain.pem
 MCP_TLS_KEY_FILE=/certs/privkey.pem
 ```
 
-Restart the server. The OAuth login page is served at `https://banana.yourdomain.com:8847/oauth/login`. Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the login page.
+Both `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` must be set together or both left empty — setting only one is a startup error.
+
+Restart the server. Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the login page (`/authorize`).
 
 ### OAuth Flow
 
-1. Claude Desktop opens the login page.
-2. The user clicks a provider button. The server redirects to the provider's authorization endpoint with a PKCE code challenge and a `state` parameter.
-3. The provider authenticates the user and redirects back to `/oauth/callback/<provider>` with an authorization code.
-4. The server exchanges the code for provider tokens, issues its own short-lived access token and long-lived refresh token, and returns them to Claude Desktop.
-5. Claude Desktop includes the access token in every subsequent MCP request as `Authorization: Bearer <access-token>`.
-6. When the access token expires (1 hour), Claude Desktop uses the refresh token to obtain a new one without requiring the user to sign in again.
+1. Claude Desktop fetches `/.well-known/oauth-authorization-server` to discover endpoints.
+2. Claude Desktop sends a dynamic registration request to `/register` (RFC 7591). The server issues a `client_id`.
+3. Claude Desktop redirects the user to `/authorize` with a PKCE code challenge (method must be `S256`). The server renders the provider login page.
+4. The user clicks a provider button. The server redirects to the provider's authorization endpoint.
+5. The provider authenticates the user and redirects back to `/callback` with an authorization code.
+6. The server validates the provider code, issues its own MCP authorization code (10-minute TTL), and redirects Claude Desktop back to its registered redirect URI.
+7. Claude Desktop POSTs to `/token` with the MCP authorization code and PKCE verifier. The server verifies the PKCE S256 challenge and issues an access token (1-hour TTL) and a refresh token (30-day TTL).
+8. Claude Desktop includes the access token in every subsequent MCP request as `Authorization: Bearer <access-token>`.
+9. When the access token expires, Claude Desktop uses the refresh token to obtain a new token pair. Refresh tokens are single-use — each refresh issues a new refresh token.
+
+---
+
+## Per-User Gemini API Keys
+
+Any authenticated request can supply a personal Gemini API key via the `X-Gemini-API-Key` header. When present, the server uses that key for the Gemini API call instead of the server's `GEMINI_API_KEY`. The per-request key is registered with the output sanitizer so it is never echoed back in responses or logs.
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://<server-ip-or-tunnel>:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-personal-gemini-key>"
+  }
+}'
+```
+
+This is useful in multi-user deployments where each developer has their own Gemini quota. The `X-Gemini-API-Key` header works with all three auth options above.
