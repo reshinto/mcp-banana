@@ -99,18 +99,27 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	startupContext := context.Background()
-	geminiClient, clientError := clientFactory(
-		startupContext,
-		serverConfig.GeminiAPIKey,
-		serverConfig.RequestTimeoutSecs,
-		serverConfig.ProConcurrency,
-	)
-	if clientError != nil {
-		_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
-		return 1
+	var geminiClient *gemini.Client
+	var clientCache *gemini.ClientCache
+
+	if serverConfig.GeminiAPIKey != "" {
+		var clientError error
+		geminiClient, clientError = clientFactory(
+			startupContext,
+			serverConfig.GeminiAPIKey,
+			serverConfig.RequestTimeoutSecs,
+			serverConfig.ProConcurrency,
+		)
+		if clientError != nil {
+			_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
+			return 1
+		}
+		clientCache = gemini.NewClientCache(geminiClient, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
+	} else {
+		logger.Info("no GEMINI_API_KEY configured -- clients must provide their own key via X-Gemini-API-Key header")
+		clientCache = gemini.NewClientCache(nil, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 	}
 
-	clientCache := gemini.NewClientCache(geminiClient, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 	mcpServer := internalserver.NewMCPServer(geminiClient, clientCache, serverConfig.MaxImageBytes)
 
 	providers := oauth.BuildActiveProviders(

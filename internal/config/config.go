@@ -48,9 +48,9 @@ type Config struct {
 // not when the first request arrives.
 func Load() (*Config, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return nil, errors.New("GEMINI_API_KEY is required")
-	}
+	// GEMINI_API_KEY is optional when clients provide their own key via the
+	// X-Gemini-API-Key header. If neither is set, image generation requests
+	// will fail at runtime with a clear error.
 
 	authToken := os.Getenv("MCP_AUTH_TOKEN")
 	authTokensFile := os.Getenv("MCP_AUTH_TOKENS_FILE")

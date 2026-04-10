@@ -29,6 +29,9 @@ func NewEditImageHandler(service gemini.GeminiService, clientCache *gemini.Clien
 				resolvedService = perRequestClient
 			}
 		}
+		if resolvedService == nil {
+			return mcp.NewToolResultError("no API key configured: set GEMINI_API_KEY on the server or send X-Gemini-API-Key header"), nil
+		}
 
 		instructions := req.GetString("instructions", "")
 		modelAlias := req.GetString("model", defaultModel)

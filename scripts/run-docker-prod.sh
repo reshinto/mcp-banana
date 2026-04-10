@@ -4,7 +4,8 @@
 #
 # Prerequisites:
 #   - Docker and Docker Compose installed
-#   - .env file with GEMINI_API_KEY, MCP_AUTH_TOKEN, TLS and OAuth vars configured
+#   - .env file with MCP_AUTH_TOKEN, TLS and OAuth vars configured
+#     (GEMINI_API_KEY optional if clients send X-Gemini-API-Key header)
 #   - TLS certificates at /etc/letsencrypt/live/mcp.terencekong.net/
 #   - DNS A record for mcp.terencekong.net pointing to this server
 #
@@ -20,8 +21,7 @@ if [ ! -f .env ]; then
 fi
 
 if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
-  echo "ERROR: GEMINI_API_KEY is not set in .env" >&2
-  exit 1
+  echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
 # Check TLS cert existence

@@ -31,12 +31,15 @@ func TestLoad_ValidConfig(test *testing.T) {
 	}
 }
 
-func TestLoad_MissingAPIKey(test *testing.T) {
+func TestLoad_EmptyAPIKey_Succeeds(test *testing.T) {
 	test.Setenv("GEMINI_API_KEY", "")
 
-	_, loadError := config.Load()
-	if loadError == nil {
-		test.Fatal("expected error for missing API key")
+	serverConfig, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("expected no error for empty API key (per-user keys supported), got: %v", loadError)
+	}
+	if serverConfig.GeminiAPIKey != "" {
+		test.Errorf("expected empty GeminiAPIKey, got: %s", serverConfig.GeminiAPIKey)
 	}
 }
 

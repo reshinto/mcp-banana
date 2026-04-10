@@ -4,7 +4,7 @@
 #
 # Prerequisites:
 #   - Docker and Docker Compose installed
-#   - .env file with at least GEMINI_API_KEY set
+#   - .env file (GEMINI_API_KEY optional if clients send X-Gemini-API-Key header)
 #
 # The server binds to 127.0.0.1:8847 (loopback only).
 # Access it from the same machine or via SSH tunnel.
@@ -19,8 +19,7 @@ if [ ! -f .env ]; then
 fi
 
 if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
-  echo "ERROR: GEMINI_API_KEY is not set in .env" >&2
-  exit 1
+  echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
 echo "Building and starting mcp-banana (dev mode, 127.0.0.1:8847)..."

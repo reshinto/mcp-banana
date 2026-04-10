@@ -4,7 +4,8 @@
 #
 # Prerequisites:
 #   - Go 1.25+ installed
-#   - GEMINI_API_KEY set in .env or exported in shell
+#   - GEMINI_API_KEY set in .env or exported in shell (optional if clients
+#     provide their own key via X-Gemini-API-Key header)
 #
 # This script loads .env, builds the binary, and starts in stdio mode.
 
@@ -20,8 +21,7 @@ if [ -f .env ]; then
 fi
 
 if [ -z "${GEMINI_API_KEY:-}" ]; then
-  echo "ERROR: GEMINI_API_KEY is not set. Set it in .env or export it." >&2
-  exit 1
+  echo "NOTE: GEMINI_API_KEY is not set. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
 echo "Building mcp-banana..."

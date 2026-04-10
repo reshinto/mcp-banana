@@ -183,18 +183,25 @@ func TestRun_HealthCheckConnectionRefused(test *testing.T) {
 
 // --- Config loading ---
 
-func TestRun_MissingAPIKey(test *testing.T) {
+func TestRun_NoAPIKey_StartsWithWarning(test *testing.T) {
 	withCleanSecrets(test)
 	test.Setenv("GEMINI_API_KEY", "")
 
+	origValidator := registryValidator
+	origStdio := stdioServe
+	defer func() { registryValidator = origValidator; stdioServe = origStdio }()
+
+	registryValidator = func() error { return nil }
+	stdioServe = func(_ *mcpserver.MCPServer) error { return nil }
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	exitCode := run([]string{}, &stdout, &stderr)
-	if exitCode != 1 {
-		test.Fatalf("expected exit code 1, got %d", exitCode)
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 0 {
+		test.Fatalf("expected exit code 0 (server starts without API key), got %d; stderr: %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "failed to load config") {
-		test.Errorf("expected config error, got: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "no GEMINI_API_KEY configured") {
+		test.Errorf("expected warning about missing API key, got: %q", stderr.String())
 	}
 }
 
