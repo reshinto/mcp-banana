@@ -23,7 +23,7 @@ All application code. Go's `internal/` convention prevents these packages from b
 
 ### `go.mod` and `go.sum`
 
-Go module definition and dependency checksums. `go.mod` declares the module path (`github.com/reshinto/mcp-banana`), the Go version requirement (`go 1.26.1`), and all direct and indirect dependencies. `go.sum` records the expected cryptographic hashes of every dependency version to prevent supply chain tampering.
+Go module definition and dependency checksums. `go.sum` records cryptographic hashes of every dependency to prevent supply chain tampering.
 
 ## Build and Operations
 
@@ -73,19 +73,13 @@ Defines a single service named `mcp-banana`:
 
 ### `mcp-banana`
 
-The compiled binary, produced by `make build`. Listed in `.gitignore` and not committed. Rebuild with `make build` after pulling new code.
+The compiled binary, produced by `make build`. Not committed (`.gitignore`).
 
 ## Configuration
 
 ### `.env.example`
 
-Template for the server's runtime configuration. Copy to `.env` and fill in values before running locally or deploying:
-
-```bash
-cp .env.example .env
-```
-
-Documents all environment variables with their purpose, default values, and validation constraints. The `.env` file itself is excluded from version control by `.gitignore`.
+Template for runtime configuration. Copy to `.env` and fill in values. See [setup-and-operations.md](setup-and-operations.md) for the full configuration reference table.
 
 ### `.mcp.json`
 
@@ -109,52 +103,16 @@ Each developer provides their own `GEMINI_API_KEY` via their user-scoped Claude 
 
 ### `.golangci.yml`
 
-golangci-lint v2 configuration. Enables five linters:
-
-| Linter | Purpose |
-|---|---|
-| `errcheck` | Flags unchecked error return values |
-| `govet` | Runs all Go vet analyzers except `fieldalignment` (which is overly strict for maintainability) |
-| `staticcheck` | Advanced static analysis for bugs, performance issues, and API misuse |
-| `unused` | Flags unexported symbols that are never referenced |
-| `ineffassign` | Flags assignments to variables that are immediately overwritten |
-
-`fieldalignment` is explicitly disabled because optimizing struct field order for memory alignment hurts readability without meaningful benefit at this scale.
+golangci-lint v2 configuration. Enables `errcheck`, `govet`, `staticcheck`, `unused`, and `ineffassign`. Disables `fieldalignment` (readability over micro-optimization at this scale).
 
 ## CI
 
 ### `.github/workflows/ci.yml`
 
-Continuous integration workflow. Triggers on pushes to `feat/**`, `fix/**`, `chore/**` branches and on pull requests to `main`.
-
-Steps: lint, format check, vet, test with 80% coverage enforcement, binary build, binary size check (15 MB limit), Docker image build, Docker image size check (25 MB limit). All action versions are pinned to commit SHAs for supply chain security.
-
-Deployment to production is done manually via SSH. There is no automated CD pipeline.
+CI workflow on feature branch pushes and PRs to `main`. Steps: lint, format, vet, test (80% coverage), binary build (15 MB limit), Docker build (25 MB limit). Action versions pinned to commit SHAs. See [setup-and-operations.md](setup-and-operations.md) for details.
 
 ## Version Control
 
-### `.gitignore`
-
-Excludes: the compiled `mcp-banana` binary (but not the `cmd/mcp-banana/` directory), `.env` and `.env.local` files, IDE directories (`.vscode/`, `.idea/`), OS files (`.DS_Store`, `Thumbs.db`), `coverage.out`, and `.superpowers`.
-
-### `.gitattributes`
-
-Enforces line endings:
-
-- `*.go`, `Makefile`, `Dockerfile`, `*.sh`, `*.yml`, `*.yaml` files use LF (`eol=lf`) regardless of platform
-- `.claude/worktrees*` uses LF
-
-This prevents Windows developers from committing CRLF line endings that would fail the `gofmt` check on CI.
-
-### `.dockerignore`
-
-Excludes files from the Docker build context to keep the image small and avoid copying secrets:
-
-- `.git/` - version control metadata
-- `.claude/` - Claude Code configuration
-- `.env` - runtime secrets
-- `*.md` - documentation
-- `LICENSE`
-- `docs/` - documentation directory
-
-This means documentation changes do not invalidate the Docker build cache.
+- **`.gitignore`** — Excludes the compiled binary, `.env` files, IDE directories, OS files, and `coverage.out`.
+- **`.gitattributes`** — Enforces LF line endings for `*.go`, `Makefile`, `Dockerfile`, `*.sh`, `*.yml`, `*.yaml` to prevent CI failures from CRLF on Windows.
+- **`.dockerignore`** — Excludes `.git/`, `.claude/`, `.env`, docs, and `LICENSE` from the Docker build context to keep images small and avoid copying secrets.

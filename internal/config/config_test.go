@@ -15,7 +15,7 @@ import (
 // vars (like GEMINI_API_KEY) and triggers defaults for optional vars.
 
 func TestLoad_ValidConfig(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_AUTH_TOKEN", "abcdef0123456789abcdef0123456789ab")
 	test.Setenv("MCP_LOG_LEVEL", "debug")
 
@@ -23,7 +23,7 @@ func TestLoad_ValidConfig(test *testing.T) {
 	if loadError != nil {
 		test.Fatalf("unexpected error: %v", loadError)
 	}
-	if serverConfig.GeminiAPIKey != "AIzaSyTestKeyThatIsExactly39CharsLong01" {
+	if serverConfig.GeminiAPIKey != "test-gemini-key-placeholder-for-unit-tests" {
 		test.Errorf("unexpected API key: %s", serverConfig.GeminiAPIKey)
 	}
 	if serverConfig.LogLevel != "debug" {
@@ -41,7 +41,7 @@ func TestLoad_MissingAPIKey(test *testing.T) {
 }
 
 func TestLoad_DefaultLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "")
 
 	serverConfig, loadError := config.Load()
@@ -54,7 +54,7 @@ func TestLoad_DefaultLogLevel(test *testing.T) {
 }
 
 func TestLoad_InvalidLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "GARBAGE")
 
 	_, loadError := config.Load()
@@ -64,7 +64,7 @@ func TestLoad_InvalidLogLevel(test *testing.T) {
 }
 
 func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "abc")
 
 	_, loadError := config.Load()
@@ -74,7 +74,7 @@ func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
 }
 
 func TestLoad_ZeroRateLimit(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "0")
 
 	_, loadError := config.Load()
@@ -84,7 +84,7 @@ func TestLoad_ZeroRateLimit(test *testing.T) {
 }
 
 func TestLoad_NegativeConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_PRO_CONCURRENCY", "-1")
 
 	_, loadError := config.Load()
@@ -94,7 +94,7 @@ func TestLoad_NegativeConcurrency(test *testing.T) {
 }
 
 func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "4")
 	test.Setenv("MCP_PRO_CONCURRENCY", "10")
 
@@ -105,7 +105,7 @@ func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
 }
 
 func TestLoad_ZeroTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "0")
 
 	_, loadError := config.Load()
@@ -115,7 +115,7 @@ func TestLoad_ZeroTimeout(test *testing.T) {
 }
 
 func TestLoad_ZeroGlobalConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "0")
 
 	_, loadError := config.Load()
@@ -125,7 +125,7 @@ func TestLoad_ZeroGlobalConcurrency(test *testing.T) {
 }
 
 func TestLoad_ZeroMaxImageBytes(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_MAX_IMAGE_BYTES", "0")
 
 	_, loadError := config.Load()
@@ -135,7 +135,7 @@ func TestLoad_ZeroMaxImageBytes(test *testing.T) {
 }
 
 func TestLoad_NegativeTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "-1")
 
 	_, loadError := config.Load()
@@ -145,7 +145,7 @@ func TestLoad_NegativeTimeout(test *testing.T) {
 }
 
 func TestLoad_UppercaseLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "DEBUG")
 
 	serverConfig, loadError := config.Load()
@@ -158,7 +158,7 @@ func TestLoad_UppercaseLogLevel(test *testing.T) {
 }
 
 func TestLoad_AuthTokensFilePopulated(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_AUTH_TOKENS_FILE", "/tmp/test-tokens.txt")
 
 	serverConfig, loadError := config.Load()
@@ -171,7 +171,7 @@ func TestLoad_AuthTokensFilePopulated(test *testing.T) {
 }
 
 func TestLoad_ProConcurrencyEqualsGlobal(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "5")
 	test.Setenv("MCP_PRO_CONCURRENCY", "5")
 
@@ -185,7 +185,7 @@ func TestLoad_ProConcurrencyEqualsGlobal(test *testing.T) {
 }
 
 func TestLoad_MalformedGlobalConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "abc")
 
 	_, loadError := config.Load()
@@ -195,7 +195,7 @@ func TestLoad_MalformedGlobalConcurrency(test *testing.T) {
 }
 
 func TestLoad_MalformedMaxImageBytes(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_MAX_IMAGE_BYTES", "abc")
 
 	_, loadError := config.Load()
@@ -205,7 +205,7 @@ func TestLoad_MalformedMaxImageBytes(test *testing.T) {
 }
 
 func TestLoad_MalformedTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "abc")
 
 	_, loadError := config.Load()
@@ -215,7 +215,7 @@ func TestLoad_MalformedTimeout(test *testing.T) {
 }
 
 func TestLoad_MalformedProConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_PRO_CONCURRENCY", "abc")
 
 	_, loadError := config.Load()
@@ -225,7 +225,7 @@ func TestLoad_MalformedProConcurrency(test *testing.T) {
 }
 
 func TestLoad_DefaultLimits(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
