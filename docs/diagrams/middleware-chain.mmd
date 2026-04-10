@@ -1,0 +1,22 @@
+flowchart TD
+    REQ([Incoming HTTP Request]) --> PANIC[Panic Recovery<br/>defer recover]
+    PANIC --> HEALTHZ{Path == /healthz?}
+    HEALTHZ -->|Yes| PASS[Pass through to handler<br/>Skip all middleware]
+    HEALTHZ -->|No| AUTH{Bearer token<br/>matches?}
+    AUTH -->|No| R401[401 unauthorized]
+    AUTH -->|Yes| RATE{Rate limit<br/>allows?}
+    RATE -->|No| R429[429 rate_limited<br/>+ Retry-After header]
+    RATE -->|Yes| SEM{Concurrency slot<br/>available within 5s?}
+    SEM -->|No| R503[503 server_busy]
+    SEM -->|Yes| BODY[Pre-read body<br/>MaxBytesReader 15MB]
+    BODY --> BODYOK{Body read OK?}
+    BODYOK -->|Size exceeded| R413[413 request_too_large]
+    BODYOK -->|Other error| R400[400 bad_request]
+    BODYOK -->|OK| HANDLER[MCP Handler<br/>Tool execution]
+    HANDLER --> RESP([Response to client])
+
+    style R401 fill:#fcc,stroke:#c33
+    style R429 fill:#fcc,stroke:#c33
+    style R503 fill:#fcc,stroke:#c33
+    style R413 fill:#fcc,stroke:#c33
+    style R400 fill:#fcc,stroke:#c33

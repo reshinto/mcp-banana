@@ -1,0 +1,11 @@
+flowchart TD
+    INPUT([task_description + priority]) --> PRIO{priority value?}
+    PRIO -->|speed| ORIGINAL[nano-banana-original<br/>3-8s, fastest]
+    PRIO -->|quality| PRO[nano-banana-pro<br/>15-45s, best quality]
+    PRIO -->|balanced / empty / unknown| KW_CHECK[Check task_description keywords]
+
+    KW_CHECK --> PRO_KW{Contains professional,<br/>photorealistic, detailed,<br/>complex, or final?}
+    PRO_KW -->|Yes| PRO
+    PRO_KW -->|No| SPEED_KW{Contains quick, draft,<br/>sketch, iterate,<br/>batch, or preview?}
+    SPEED_KW -->|Yes| ORIGINAL
+    SPEED_KW -->|No| DEFAULT[nano-banana-2<br/>5-10s, balanced default]

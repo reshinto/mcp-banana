@@ -1,0 +1,30 @@
+sequenceDiagram
+    participant CC as Claude Code
+    participant MW as Middleware
+    participant TH as Tool Handler
+    participant SEC as Security
+    participant GEM as Gemini Client
+    participant API as Gemini API
+
+    CC->>MW: POST /mcp (JSON-RPC)
+    MW->>MW: Panic recovery
+    MW->>MW: Bearer token auth
+    MW->>MW: Rate limit check
+    MW->>MW: Concurrency semaphore
+    MW->>MW: Body size check (15MB)
+    MW->>TH: generate_image call
+    TH->>SEC: ValidatePrompt(prompt)
+    TH->>SEC: ValidateModelAlias(model)
+    TH->>SEC: ValidateAspectRatio(ratio)
+    TH->>GEM: GenerateImage(ctx, alias, prompt, opts)
+    GEM->>GEM: LookupModel(alias) -> GeminiID
+    GEM->>GEM: Pro semaphore (if nano-banana-pro)
+    GEM->>GEM: context.WithTimeout(120s)
+    GEM->>API: GenerateContent(modelID, parts, config)
+    API-->>GEM: Response with image data
+    GEM->>GEM: extractImage() -> ImageResult
+    GEM->>GEM: MapError() on failure (safe codes only)
+    GEM-->>TH: ImageResult (alias in ModelUsed, NOT GeminiID)
+    TH->>TH: json.Marshal(result)
+    TH-->>MW: CallToolResult (Go error always nil)
+    MW-->>CC: JSON-RPC response

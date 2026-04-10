@@ -1,0 +1,22 @@
+{
+  "core": [
+    "dev-forge@dev-forge",
+    "superpowers",
+    "commit-commands",
+    "context7",
+    "github",
+    "code-review",
+    "pr-review-toolkit"
+  ],
+  "branch_modes": {
+    "feat/backend-": ["security-guidance"],
+    "fix/backend-": ["security-guidance"],
+    "feat/api-": ["security-guidance"],
+    "fix/api-": ["security-guidance"],
+    "feat/refactor-": ["code-simplifier"],
+    "refactor/": ["code-simplifier"],
+    "chore/claude-": ["claude-md-management", "skill-creator", "claude-code-setup"],
+    "chore/skill-": ["skill-creator"],
+    "chore/meta-": ["claude-md-management", "claude-code-setup", "ralph-loop"]
+  }
+}

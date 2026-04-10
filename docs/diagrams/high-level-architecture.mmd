@@ -1,0 +1,24 @@
+graph TB
+    CC[Claude Code] -->|stdio JSON-RPC| STDIO[Stdio Transport]
+    CC -->|HTTP + Bearer Token| HTTP[HTTP Transport]
+
+    STDIO --> MCP[MCP Server<br/>mark3labs/mcp-go]
+    HTTP --> MW[Middleware Chain]
+    MW --> MCP
+
+    MCP --> GEN[generate_image]
+    MCP --> EDIT[edit_image]
+    MCP --> LIST[list_models]
+    MCP --> REC[recommend_model]
+
+    GEN --> SEC[Security Layer<br/>validate + sanitize]
+    EDIT --> SEC
+    REC --> POL[Policy Engine<br/>model recommendation]
+
+    SEC --> GEM[Gemini Client<br/>google.golang.org/genai]
+
+    GEM -->|API Key secret| API[Google Gemini API]
+
+    style SEC fill:#f9d,stroke:#333
+    style MW fill:#bbf,stroke:#333
+    style API fill:#bfb,stroke:#333

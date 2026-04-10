@@ -1,0 +1,9 @@
+\.Error\(\).*fmt\.Sprintf
+\.Error\(\).*Errorf
+exec\.Command
+exec\.CommandContext
+GEMINI_API_KEY
+MCP_AUTH_TOKEN
+AIza[0-9A-Za-z_-]{35}
+0\.0\.0\.0:
+WriteTimeout
