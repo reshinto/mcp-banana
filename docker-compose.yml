@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  mcp-banana:
+    build: .
+    ports:
+      - "127.0.0.1:8847:8847"
+    env_file:
+      - .env
+    restart: unless-stopped
+    stop_grace_period: 120s
+    mem_limit: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
