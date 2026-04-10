@@ -1,5 +1,7 @@
 services:
   mcp-banana:
+    container_name: mcp-banana
+    image: mcp-banana
     build: .
     ports:
       - "127.0.0.1:8847:8847"
