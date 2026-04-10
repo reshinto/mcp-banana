@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/reshinto/mcp-banana/internal/config"
+	"github.com/reshinto/mcp-banana/internal/gemini"
+	"github.com/reshinto/mcp-banana/internal/oauth"
+	"github.com/reshinto/mcp-banana/internal/security"
 	"golang.org/x/time/rate"
 )
 
@@ -24,14 +27,17 @@ const (
 
 // middleware holds the configuration and state for the HTTP middleware chain.
 type middleware struct {
-	cfg       *config.Config
-	logger    *slog.Logger
-	limiter   *rate.Limiter
-	semaphore chan struct{}
+	cfg        *config.Config
+	logger     *slog.Logger
+	limiter    *rate.Limiter
+	semaphore  chan struct{}
+	oauthStore *oauth.Store
 }
 
 // newMiddleware creates a middleware instance configured from cfg.
-func newMiddleware(cfg *config.Config, logger *slog.Logger) *middleware {
+// Pass a non-nil oauthStore to enable OAuth access token validation as a
+// fallback authentication path alongside the static bearer token check.
+func newMiddleware(cfg *config.Config, logger *slog.Logger, oauthStore *oauth.Store) *middleware {
 	tokensPerSecond := rate.Limit(float64(cfg.RateLimit) / 60.0)
 	limiter := rate.NewLimiter(tokensPerSecond, cfg.RateLimit)
 
@@ -41,10 +47,11 @@ func newMiddleware(cfg *config.Config, logger *slog.Logger) *middleware {
 	}
 
 	return &middleware{
-		cfg:       cfg,
-		logger:    logger,
-		limiter:   limiter,
-		semaphore: semaphore,
+		cfg:        cfg,
+		logger:     logger,
+		limiter:    limiter,
+		semaphore:  semaphore,
+		oauthStore: oauthStore,
 	}
 }
 
@@ -120,6 +127,12 @@ func (mw *middleware) authenticateRequest(request *http.Request) bool {
 		return true
 	}
 
+	// SECURITY: OAuth access tokens are validated last, after static bearer tokens.
+	// Only reached when static auth is configured but no static token matched.
+	if mw.oauthStore != nil && mw.oauthStore.ValidateAccessToken(requestToken) {
+		return true
+	}
+
 	return false
 }
 
@@ -150,6 +163,16 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 		if !mw.authenticateRequest(request) {
 			writeJSONError(writer, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+
+		// Extract per-request Gemini API key from header and store in context.
+		// SECURITY: Register the key with the sanitizer so it is redacted from all
+		// logs and error output, then attach it to the request context for downstream
+		// tool handlers to resolve the correct Gemini client.
+		geminiAPIKey := request.Header.Get("X-Gemini-API-Key")
+		if geminiAPIKey != "" {
+			security.RegisterSecret(geminiAPIKey)
+			request = request.WithContext(gemini.WithAPIKey(request.Context(), geminiAPIKey))
 		}
 
 		// 4. Rate limiting

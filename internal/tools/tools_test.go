@@ -59,7 +59,7 @@ func stubImageResult() *gemini.ImageResult {
 
 func TestGenerateImageHandler_Success(test *testing.T) {
 	svc := &mockGeminiService{generateResult: stubImageResult()}
-	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a sunny beach"})
 	result, err := handler(context.Background(), req)
@@ -86,7 +86,7 @@ func TestGenerateImageHandler_Success(test *testing.T) {
 
 func TestGenerateImageHandler_EmptyPrompt(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": ""})
 	result, err := handler(context.Background(), req)
@@ -105,7 +105,7 @@ func TestGenerateImageHandler_EmptyPrompt(test *testing.T) {
 
 func TestGenerateImageHandler_InvalidModel(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "hello", "model": "not-a-real-model"})
 	result, err := handler(context.Background(), req)
@@ -124,7 +124,7 @@ func TestGenerateImageHandler_InvalidModel(test *testing.T) {
 
 func TestGenerateImageHandler_GeminiError(test *testing.T) {
 	svc := &mockGeminiService{generateError: errors.New("quota exceeded somewhere")}
-	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a portrait"})
 	result, err := handler(context.Background(), req)
@@ -148,7 +148,7 @@ func TestGenerateImageHandler_GeminiError(test *testing.T) {
 
 func TestGenerateImageHandler_InvalidAspectRatio(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, 10*1024*1024)
+	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a sunset", "aspect_ratio": "99:99"})
 	result, err := handler(context.Background(), req)
@@ -264,7 +264,7 @@ func TestRecommendModelHandler_EmptyTaskDescription(test *testing.T) {
 
 func TestEditImageHandler_Success(test *testing.T) {
 	svc := &mockGeminiService{editResult: stubImageResult()}
-	handler := NewEditImageHandler(svc, 10*1024*1024)
+	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
@@ -292,7 +292,7 @@ func TestEditImageHandler_Success(test *testing.T) {
 
 func TestEditImageHandler_EmptyInstructions(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, 10*1024*1024)
+	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "",
@@ -315,7 +315,7 @@ func TestEditImageHandler_EmptyInstructions(test *testing.T) {
 
 func TestEditImageHandler_InvalidModel(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, 10*1024*1024)
+	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
@@ -339,7 +339,7 @@ func TestEditImageHandler_InvalidModel(test *testing.T) {
 
 func TestEditImageHandler_GeminiError(test *testing.T) {
 	svc := &mockGeminiService{editError: errors.New("internal failure")}
-	handler := NewEditImageHandler(svc, 10*1024*1024)
+	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
@@ -362,7 +362,7 @@ func TestEditImageHandler_GeminiError(test *testing.T) {
 
 func TestEditImageHandler_InvalidImage(test *testing.T) {
 	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, 10*1024*1024)
+	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it darker",

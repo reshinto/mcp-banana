@@ -10,12 +10,15 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/reshinto/mcp-banana/internal/config"
 	"github.com/reshinto/mcp-banana/internal/gemini"
+	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/tools"
 )
 
 // NewMCPServer creates and configures an MCP server with all four tool handlers
 // registered. Both HTTP and stdio transports share the returned instance.
-func NewMCPServer(service gemini.GeminiService, maxImageBytes int) *mcpserver.MCPServer {
+// clientCache is optional; when non-nil, per-request Gemini API keys extracted
+// from the X-Gemini-API-Key header are resolved to dedicated clients.
+func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
 	srv := mcpserver.NewMCPServer("mcp-banana", "1.0.0")
 
 	generateImageTool := mcp.NewTool("generate_image",
@@ -31,7 +34,7 @@ func NewMCPServer(service gemini.GeminiService, maxImageBytes int) *mcpserver.MC
 			mcp.Description("Optional aspect ratio for the generated image (e.g. '16:9', '1:1')."),
 		),
 	)
-	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(service, maxImageBytes))
+	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(service, clientCache, maxImageBytes))
 
 	editImageTool := mcp.NewTool("edit_image",
 		mcp.WithDescription("Edit an existing image using text instructions and the Gemini image editing API."),
@@ -51,7 +54,7 @@ func NewMCPServer(service gemini.GeminiService, maxImageBytes int) *mcpserver.MC
 			mcp.Description("MIME type of the image (e.g. 'image/png', 'image/jpeg')."),
 		),
 	)
-	srv.AddTool(editImageTool, tools.NewEditImageHandler(service, maxImageBytes))
+	srv.AddTool(editImageTool, tools.NewEditImageHandler(service, clientCache, maxImageBytes))
 
 	listModelsTool := mcp.NewTool("list_models",
 		mcp.WithDescription("List all available model aliases and their capabilities."),
@@ -76,15 +79,19 @@ func NewMCPServer(service gemini.GeminiService, maxImageBytes int) *mcpserver.MC
 // WrapWithMiddleware applies the full middleware chain (panic recovery, auth,
 // rate limiting, concurrency semaphore, body size limit) to an arbitrary
 // http.Handler. Exported primarily for testing middleware in isolation.
-func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Handler) http.Handler {
-	mw := newMiddleware(cfg, logger)
+// Pass a non-nil oauthStore to enable OAuth access token validation as a
+// fallback authentication path alongside the static bearer token check.
+func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Handler, oauthStore *oauth.Store) http.Handler {
+	mw := newMiddleware(cfg, logger, oauthStore)
 	return mw.WrapHTTP(inner)
 }
 
 // NewHTTPHandler wraps an MCP server with HTTP routing and middleware.
 // It mounts /healthz directly on the mux and /mcp via the streamable HTTP
-// transport. All routes except /healthz pass through the full middleware chain.
-func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, logger *slog.Logger) http.Handler {
+// transport. When oauthStore and providers are non-nil and OAuthBaseURL is set,
+// OAuth 2.1 discovery and flow endpoints are also registered. All routes except
+// /healthz pass through the full middleware chain.
+func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, logger *slog.Logger, oauthStore *oauth.Store, providers []oauth.ProviderConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
@@ -99,6 +106,14 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 	)
 	mux.Handle("/mcp", streamableHandler)
 
-	mw := newMiddleware(serverConfig, logger)
+	if oauthStore != nil && serverConfig.OAuthBaseURL != "" {
+		mux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
+		mux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
+		mux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		mux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		mux.Handle("/token", oauth.NewTokenHandler(oauthStore))
+	}
+
+	mw := newMiddleware(serverConfig, logger, oauthStore)
 	return mw.WrapHTTP(mux)
 }

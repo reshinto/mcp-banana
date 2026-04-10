@@ -110,7 +110,8 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
-	mcpServer := internalserver.NewMCPServer(geminiClient, serverConfig.MaxImageBytes)
+	clientCache := gemini.NewClientCache(geminiClient, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
+	mcpServer := internalserver.NewMCPServer(geminiClient, clientCache, serverConfig.MaxImageBytes)
 
 	providers := oauth.BuildActiveProviders(
 		serverConfig.OAuthGoogleClientID, serverConfig.OAuthGoogleClientSecret,

@@ -42,7 +42,7 @@ func defaultTestConfig() *config.Config {
 
 // buildHandler wires the full stack (MCP server + middleware) using the provided config.
 func buildHandler(cfg *config.Config) http.Handler {
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
 	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil)
 }
 

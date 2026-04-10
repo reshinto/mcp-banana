@@ -43,10 +43,13 @@ claude mcp add-json --scope user banana '{
   "type": "http",
   "url": "http://<server-ip>:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>"
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
+
+The `X-Gemini-API-Key` header is optional. When provided, the server uses that key for the request instead of the server's default `GEMINI_API_KEY`. This enables each user to bill their own Gemini quota without sharing a single server-side key.
 
 **4. Generate an image**
 
