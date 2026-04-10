@@ -16,6 +16,7 @@ import (
 
 	"github.com/reshinto/mcp-banana/internal/config"
 	"github.com/reshinto/mcp-banana/internal/gemini"
+	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/server"
 )
 
@@ -436,6 +437,215 @@ func TestMiddlewareRetryAfterClampedToOne(test *testing.T) {
 	retryAfter := limitedRec.Header().Get("Retry-After")
 	if retryAfter != "1" {
 		test.Errorf("expected Retry-After '1', got %q", retryAfter)
+	}
+}
+
+// --- Middleware: OAuth access token validation ---
+
+// buildHandlerWithOAuth creates a handler with an oauth.Store that has a valid access token pre-loaded.
+func buildHandlerWithOAuth(cfg *config.Config, validToken string) (http.Handler, *oauth.Store) {
+	store := oauth.NewStore()
+	store.StoreAccessToken(&oauth.TokenData{
+		Token:     validToken,
+		ClientID:  "test-client",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	})
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
+	return handler, store
+}
+
+// TestMiddlewareOAuthTokenAccepted verifies that a valid OAuth access token is accepted
+// when static auth is also configured but the OAuth token matches.
+func TestMiddlewareOAuthTokenAccepted(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "static-secret",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	handler, _ := buildHandlerWithOAuth(cfg, "valid-oauth-token-xyz")
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer valid-oauth-token-xyz")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnauthorized {
+		test.Fatalf("expected OAuth token to be accepted, got 401")
+	}
+}
+
+// TestMiddlewareOAuthTokenRejectedWhenExpired verifies that an expired OAuth access token
+// is rejected even when an oauth.Store is configured.
+func TestMiddlewareOAuthTokenRejectedWhenExpired(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "static-secret",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	store := oauth.NewStore()
+	store.StoreAccessToken(&oauth.TokenData{
+		Token:     "expired-oauth-token",
+		ClientID:  "test-client",
+		ExpiresAt: time.Now().Add(-1 * time.Hour), // already expired
+	})
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer expired-oauth-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for expired OAuth token, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: per-request Gemini API key ---
+
+// TestMiddlewareGeminiAPIKeyPassedToContext verifies that a valid X-Gemini-API-Key header
+// is extracted and attached to the request context, enabling per-user client selection.
+func TestMiddlewareGeminiAPIKeyPassedToContext(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+
+	// Use a handler that captures the context to verify the key was injected.
+	var capturedKey string
+	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		capturedKey = gemini.APIKeyFromContext(request.Context())
+	})
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), captureHandler, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("X-Gemini-API-Key", "per-user-api-key-abc")
+	rec := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rec, req)
+
+	if capturedKey != "per-user-api-key-abc" {
+		test.Errorf("expected per-user key in context, got %q", capturedKey)
+	}
+}
+
+// TestMiddlewareNoGeminiAPIKey verifies that omitting X-Gemini-API-Key results in
+// an empty string from context (the default client is used).
+func TestMiddlewareNoGeminiAPIKey(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+
+	var capturedKey string
+	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		capturedKey = gemini.APIKeyFromContext(request.Context())
+	})
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), captureHandler, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rec, req)
+
+	if capturedKey != "" {
+		test.Errorf("expected empty key in context when header absent, got %q", capturedKey)
+	}
+}
+
+// --- NewHTTPHandler: OAuth routes ---
+
+// TestNewHTTPHandler_OAuthRoutesMounted verifies that when oauthStore and OAuthBaseURL
+// are configured, the OAuth discovery endpoint is registered and reachable.
+func TestNewHTTPHandler_OAuthRoutesMounted(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "https://example.com",
+	}
+
+	store := oauth.NewStore()
+	providers := []oauth.ProviderConfig{
+		oauth.NewGoogleProvider("client-id", "client-secret"),
+	}
+
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// The discovery endpoint should return a 200 with JSON metadata.
+	if rec.Code != http.StatusOK {
+		test.Fatalf("expected 200 from OAuth discovery endpoint, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		test.Errorf("expected JSON content type from discovery endpoint, got %q", rec.Header().Get("Content-Type"))
+	}
+}
+
+// TestNewHTTPHandler_OAuthRoutesNotMounted verifies that when oauthStore is nil,
+// the OAuth discovery endpoint is NOT registered.
+func TestNewHTTPHandler_OAuthRoutesNotMounted(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "https://example.com",
+	}
+
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	// Passing nil store — OAuth routes should NOT be mounted.
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// Without OAuth routes, this should return 404 (not found) or pass through to the
+	// MCP handler which also won't recognise the path.
+	if rec.Code == http.StatusOK {
+		test.Fatalf("expected non-200 when OAuth routes not mounted, got %d", rec.Code)
+	}
+}
+
+// TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL verifies that even when
+// oauthStore is non-nil, OAuth routes are not mounted if OAuthBaseURL is empty.
+func TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL(test *testing.T) {
+	cfg := &config.Config{
+		AuthToken:         "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "", // no base URL → routes must not be mounted
+	}
+
+	store := oauth.NewStore()
+	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		test.Fatalf("expected non-200 when OAuthBaseURL is empty, got %d", rec.Code)
 	}
 }
 
