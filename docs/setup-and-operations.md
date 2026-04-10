@@ -6,8 +6,8 @@
 |---|---|---|
 | Go | 1.26 or later | Build from source |
 | golangci-lint | v2.11.4 or later | Code linting (development) |
-| Docker | Any recent version | Container deployment |
-| Docker Compose | v2 | Multi-container deployment |
+| Docker | 20.10+ recommended | Container deployment |
+| Docker Compose | v2 (plugin) or v1 (standalone) | Multi-container deployment |
 | OpenSSL | Any | Generating auth tokens |
 | SSH | Any | Remote deployment access |
 
@@ -132,6 +132,14 @@ See [models.md](models.md) to replace sentinel IDs before deploying.
 ```bash
 docker compose up -d --build
 ```
+
+> **Docker Compose V1 (Docker < 20.10):** If you see `unknown shorthand flag: 'd' in -d`, your Docker version does not include the Compose V2 plugin. Use the standalone `docker-compose` (hyphenated) binary instead:
+>
+> ```bash
+> docker-compose up -d --build
+> ```
+>
+> All `docker compose` commands in this guide should be replaced with `docker-compose` when using V1.
 
 The container:
 - Runs in HTTP mode on `0.0.0.0:8847` inside the container
