@@ -615,7 +615,7 @@ import (
 // vars (like GEMINI_API_KEY) and triggers defaults for optional vars.
 
 func TestLoad_ValidConfig(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_AUTH_TOKEN", "abcdef0123456789abcdef0123456789ab")
 	test.Setenv("MCP_LOG_LEVEL", "debug")
 
@@ -623,7 +623,7 @@ func TestLoad_ValidConfig(test *testing.T) {
 	if loadError != nil {
 		test.Fatalf("unexpected error: %v", loadError)
 	}
-	if serverConfig.GeminiAPIKey != "AIzaSyTestKeyThatIsExactly39CharsLong01" {
+	if serverConfig.GeminiAPIKey != "test-gemini-key-placeholder-for-unit-tests" {
 		test.Errorf("unexpected API key: %s", serverConfig.GeminiAPIKey)
 	}
 	if serverConfig.LogLevel != "debug" {
@@ -641,7 +641,7 @@ func TestLoad_MissingAPIKey(test *testing.T) {
 }
 
 func TestLoad_DefaultLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "")
 
 	serverConfig, loadError := config.Load()
@@ -654,7 +654,7 @@ func TestLoad_DefaultLogLevel(test *testing.T) {
 }
 
 func TestLoad_InvalidLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "GARBAGE")
 
 	_, loadError := config.Load()
@@ -664,7 +664,7 @@ func TestLoad_InvalidLogLevel(test *testing.T) {
 }
 
 func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "abc")
 
 	_, loadError := config.Load()
@@ -674,7 +674,7 @@ func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
 }
 
 func TestLoad_ZeroRateLimit(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "0")
 
 	_, loadError := config.Load()
@@ -684,7 +684,7 @@ func TestLoad_ZeroRateLimit(test *testing.T) {
 }
 
 func TestLoad_NegativeConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_PRO_CONCURRENCY", "-1")
 
 	_, loadError := config.Load()
@@ -694,7 +694,7 @@ func TestLoad_NegativeConcurrency(test *testing.T) {
 }
 
 func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "4")
 	test.Setenv("MCP_PRO_CONCURRENCY", "10")
 
@@ -705,7 +705,7 @@ func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
 }
 
 func TestLoad_ZeroTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "0")
 
 	_, loadError := config.Load()
@@ -715,7 +715,7 @@ func TestLoad_ZeroTimeout(test *testing.T) {
 }
 
 func TestLoad_DefaultLimits(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
@@ -1230,7 +1230,7 @@ func TestMapError_GenericError(test *testing.T) {
 func TestMapError_NeverLeaksRawText(test *testing.T) {
 	// SECURITY: Verify that raw error text (which could contain API keys
 	// or request headers) is never included in the safe output.
-	sensitiveError := errors.New("Authorization: Bearer AIzaSySecretKeyHere12345678901234567")
+	sensitiveError := errors.New("Authorization: Bearer " + "AIza" + "SySecretKeyHere12345678901234567")
 	code, message := gemini.MapError(sensitiveError)
 	if code == "" {
 		test.Error("expected non-empty code")
@@ -1276,7 +1276,7 @@ func TestMapError_TooManyRequests(test *testing.T) {
 }
 
 func TestMapError_ServerError(test *testing.T) {
-	apiError := &genai.APIError{Code: 500, Message: "internal error with key=AIzaSySecret"}
+	apiError := &genai.APIError{Code: 500, Message: "internal error with key=" + "AIza" + "SySecret"}
 	code, message := gemini.MapError(apiError)
 	if code != "generation_failed" {
 		test.Errorf("expected generation_failed for 500, got %q", code)

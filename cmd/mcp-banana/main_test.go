@@ -77,7 +77,7 @@ func withMockListener(test *testing.T, listener net.Listener, mockError error) {
 func setupServerEnv(test *testing.T) {
 	test.Helper()
 	withCleanSecrets(test)
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	withVerifiedRegistry(test)
 	withMockClientFactory(test, nil)
 }
@@ -201,7 +201,7 @@ func TestRun_MissingAPIKey(test *testing.T) {
 
 func TestRun_RegistryValidationFails(test *testing.T) {
 	withCleanSecrets(test)
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 
 	// Use the real registry validator (sentinel IDs are present).
 	var stdout bytes.Buffer
@@ -219,7 +219,7 @@ func TestRun_RegistryValidationFails(test *testing.T) {
 
 func TestRun_ClientFactoryError(test *testing.T) {
 	withCleanSecrets(test)
-	test.Setenv("GEMINI_API_KEY", "AIzaSyTestKeyThatIsExactly39CharsLong01")
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	withVerifiedRegistry(test)
 	withMockClientFactory(test, errors.New("simulated client failure"))
 

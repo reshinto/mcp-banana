@@ -51,15 +51,11 @@ A valid key returns a JSON list of models. An invalid key returns a 400 or 403 e
 ### Test the Health Endpoint
 
 ```bash
-# Local
 curl http://127.0.0.1:8847/healthz
-
-# Through SSH tunnel
-ssh -N -L 8847:127.0.0.1:8847 <user>@<server-ip> &
-curl http://localhost:8847/healthz
+# Expected: {"status":"ok"} with HTTP 200
 ```
 
-Expected: `{"status":"ok"}` with HTTP 200. If this fails, the server is not running or not reachable.
+If this fails, the server is not running or not reachable. See [setup-and-operations.md](setup-and-operations.md) for health check and monitoring details.
 
 ### Verify Claude Code Can See the Server
 

@@ -68,13 +68,7 @@ claude mcp add-json --scope user banana '{
 
 ### SSH Tunnel (Recommended for Production)
 
-The server binds to `127.0.0.1:8847` inside Docker (not publicly exposed). Open a tunnel first:
-
-```bash
-ssh -N -L 8847:127.0.0.1:8847 <user>@<droplet-ip>
-```
-
-Then connect using `localhost`:
+The server binds to `127.0.0.1:8847` inside Docker (not publicly exposed). Set up an SSH tunnel first (see [authentication.md - Option 1: SSH Tunnel](authentication.md) for full instructions including autossh and SSH config), then connect using `localhost`:
 
 ```bash
 claude mcp add-json --scope user banana '{
