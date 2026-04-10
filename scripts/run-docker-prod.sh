@@ -2,11 +2,15 @@
 # Run mcp-banana in Docker production mode (public IP, TLS, OAuth).
 # Usage: ./scripts/run-docker-prod.sh
 #
+# This script:
+#   1. Reads MCP_DOMAIN from .env
+#   2. Auto-populates OAUTH_BASE_URL and TLS paths in .env
+#   3. Checks for TLS certificates — offers to generate them if missing
+#   4. Starts the production Docker stack
+#
 # Prerequisites:
 #   - Docker and Docker Compose installed
-#   - .env file with MCP_DOMAIN, TLS, and optionally OAuth vars configured
-#     (GEMINI_API_KEY optional if clients send X-Gemini-API-Key header)
-#   - TLS certificates at /etc/letsencrypt/live/<MCP_DOMAIN>/
+#   - .env file with MCP_DOMAIN set
 #   - DNS A record for <MCP_DOMAIN> pointing to this server
 #
 # The server binds to 0.0.0.0:8847 (all interfaces) with TLS.
@@ -56,40 +60,58 @@ if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
   echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
-# Check TLS cert existence
+# Auto-generate MCP_AUTH_TOKEN if empty
+if grep -q "^MCP_AUTH_TOKEN=$" .env 2>/dev/null; then
+  GENERATED_TOKEN=$(openssl rand -hex 32)
+  sed -i.bak "s|^MCP_AUTH_TOKEN=$|MCP_AUTH_TOKEN=${GENERATED_TOKEN}|" .env && rm -f .env.bak
+  echo "MCP_AUTH_TOKEN auto-generated and saved to .env"
+  echo "  Token: ${GENERATED_TOKEN}"
+  echo "  Use this token in your Claude Code MCP config."
+fi
+
+# Check and generate TLS certificates
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 if [ ! -d "$CERT_DIR" ]; then
   echo "" >&2
-  echo "WARNING: TLS certificate directory not found at $CERT_DIR" >&2
+  echo "TLS certificates not found at ${CERT_DIR}" >&2
   echo "" >&2
-  echo "  TLS certificates are required for HTTPS in production. Without them," >&2
-  echo "  the server cannot serve HTTPS and Claude Desktop OAuth will not work." >&2
+
+  # Check if certbot is installed
+  if ! command -v certbot &>/dev/null; then
+    echo "certbot is not installed. Installing..." >&2
+    if command -v apt-get &>/dev/null; then
+      sudo apt-get update -qq && sudo apt-get install -y -qq certbot
+    elif command -v yum &>/dev/null; then
+      sudo yum install -y certbot
+    elif command -v brew &>/dev/null; then
+      brew install certbot
+    else
+      echo "ERROR: Cannot install certbot automatically. Install it manually:" >&2
+      echo "  https://certbot.eff.org/instructions" >&2
+      exit 1
+    fi
+  fi
+
+  echo "Generating TLS certificate for ${DOMAIN}..." >&2
   echo "" >&2
-  echo "  To generate free TLS certificates using Let's Encrypt:" >&2
+  echo "Certbot will ask you to create a DNS TXT record." >&2
+  echo "Add it in your domain registrar, wait 1-2 minutes, then press Enter." >&2
   echo "" >&2
-  echo "  1. Install certbot on your server:" >&2
-  echo "       sudo apt-get install -y certbot" >&2
+
+  sudo certbot certonly --manual --preferred-challenges dns -d "${DOMAIN}"
+
+  # Verify certs were created
+  if [ ! -d "$CERT_DIR" ]; then
+    echo "ERROR: Certificate generation failed. ${CERT_DIR} not found." >&2
+    echo "  Fix the issue and re-run this script." >&2
+    exit 1
+  fi
+
   echo "" >&2
-  echo "  2. Run certbot with the DNS challenge (no port 80/443 needed):" >&2
-  echo "       sudo certbot certonly --manual --preferred-challenges dns -d ${DOMAIN}" >&2
-  echo "" >&2
-  echo "  3. Certbot will ask you to create a DNS TXT record:" >&2
-  echo "       _acme-challenge.${DOMAIN} → <value-certbot-shows>" >&2
-  echo "     Add this TXT record in your domain registrar, wait 1-2 minutes," >&2
-  echo "     then press Enter in certbot." >&2
-  echo "" >&2
-  echo "  4. Verify the certs were created:" >&2
-  echo "       sudo ls /etc/letsencrypt/live/${DOMAIN}/" >&2
-  echo "     You should see: fullchain.pem  privkey.pem  cert.pem  chain.pem" >&2
-  echo "" >&2
-  echo "  5. Re-run this script after generating the certificates." >&2
-  echo "" >&2
-  echo "  If you are running this locally (not on the production server)," >&2
-  echo "  this warning is expected — TLS certs only exist on the server." >&2
-  echo "  Use ./scripts/run-docker-dev.sh for local development instead." >&2
-  echo "" >&2
+  echo "TLS certificates generated successfully at ${CERT_DIR}" >&2
 fi
 
+echo ""
 echo "Building and starting mcp-banana (production mode, 0.0.0.0:8847, domain: ${DOMAIN})..."
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
