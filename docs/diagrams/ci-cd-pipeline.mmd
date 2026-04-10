@@ -1,0 +1,21 @@
+flowchart LR
+    subgraph CI["CI Workflow"]
+        LINT[golangci-lint] --> FMT[gofmt check]
+        FMT --> VET[go vet]
+        VET --> TEST[go test -race<br/>80% coverage]
+        TEST --> BUILD[Build binary<br/>max 15MB]
+        BUILD --> DOCKER_BUILD[Build Docker image<br/>max 25MB]
+    end
+
+    subgraph CD["CD Workflow - main only"]
+        CI_PASS[CI passes] --> SENTINEL_CHECK{Sentinel IDs<br/>in registry?}
+        SENTINEL_CHECK -->|Yes| BLOCK[Block deploy]
+        SENTINEL_CHECK -->|No| SSH[SSH to DigitalOcean]
+        SSH --> PULL[git fetch + reset]
+        PULL --> COMPOSE[docker compose up --build]
+        COMPOSE --> HEALTH_CHECK{Health check<br/>6 attempts x 5s}
+        HEALTH_CHECK -->|Pass| SUCCESS[Deploy complete<br/>Prune old images]
+        HEALTH_CHECK -->|Fail| ROLLBACK[Auto-rollback to previous SHA]
+    end
+
+    CI --> CI_PASS

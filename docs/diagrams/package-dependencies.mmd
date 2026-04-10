@@ -1,0 +1,24 @@
+graph TD
+    MAIN["cmd/mcp-banana<br/>(main.go)"] --> CONFIG["internal/config<br/>Config, Load()"]
+    MAIN --> GEMINI["internal/gemini<br/>Client, Registry, Errors"]
+    MAIN --> SECURITY_S["internal/security<br/>RegisterSecret()"]
+    MAIN --> SERVER["internal/server<br/>NewMCPServer, NewHTTPHandler"]
+
+    SERVER --> CONFIG
+    SERVER --> GEMINI
+    SERVER --> TOOLS["internal/tools<br/>Handler factories"]
+
+    TOOLS --> GEMINI
+    TOOLS --> SECURITY_V["internal/security<br/>Validate*()"]
+    TOOLS --> POLICY["internal/policy<br/>Recommend()"]
+
+    SECURITY_V --> GEMINI
+
+    SERVER -.->|middleware| RATE["golang.org/x/time/rate"]
+    GEMINI -.->|SDK| GENAI["google.golang.org/genai"]
+    SERVER -.->|protocol| MCPGO["mark3labs/mcp-go"]
+
+    style MAIN fill:#ffd,stroke:#333
+    style GEMINI fill:#dfd,stroke:#333
+    style SECURITY_V fill:#f9d,stroke:#333
+    style SECURITY_S fill:#f9d,stroke:#333
