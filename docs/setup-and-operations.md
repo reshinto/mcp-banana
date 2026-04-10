@@ -278,6 +278,8 @@ Apple — [developer.apple.com/account/resources/identifiers](https://developer.
 Register a Services ID. Set the return URL to:
 `https://mcp.terencekong.net:8847/callback`
 
+> **Apple Sign-In limitations:** Apple requires an Apple Developer account ($99/year), HTTPS with a registered domain (no `http://localhost`), and a JWT-based client secret generated from a private key — not a static string. Apple Sign-In can only be tested on a production server with TLS. See the [Local OAuth Testing](#local-oauth-testing) section for details.
+
 **Add credentials to `.env`:**
 
 ```
@@ -419,6 +421,76 @@ This prints a new random token and step-by-step instructions for updating the se
    claude mcp add-json --scope user banana \
      '{"type":"http","url":"http://127.0.0.1:8847/mcp","headers":{"Authorization":"Bearer <new-token>"}}'
    ```
+
+---
+
+## Local OAuth Testing
+
+Test the OAuth flow on your local machine before deploying to production.
+
+### Provider compatibility with localhost
+
+| Provider | `http://localhost` callbacks | Notes |
+|---|---|---|
+| Google | Yes | Create a "Web application" OAuth client; add `http://localhost:8847/callback` as an authorized redirect URI |
+| GitHub | Yes | Create an OAuth App; set callback URL to `http://localhost:8847/callback` |
+| Apple | No | Requires HTTPS with a registered domain, an Apple Developer account ($99/year), and a JWT-based client secret. Test Apple only on production with TLS. |
+
+### Steps
+
+**1. Register a dev OAuth app with Google or GitHub** (see links in [Mode 3 Step 5](#step-5--configure-oauth-optional)). Use `http://localhost:8847/callback` as the redirect URI.
+
+**2. Add credentials to `.env`:**
+
+```
+OAUTH_BASE_URL=http://localhost:8847
+OAUTH_GOOGLE_CLIENT_ID=<your-dev-client-id>
+OAUTH_GOOGLE_CLIENT_SECRET=<your-dev-client-secret>
+```
+
+**3. Restart the server:**
+
+```bash
+docker compose down && docker compose up -d
+```
+
+**4. Verify the metadata endpoint:**
+
+```bash
+curl -s http://localhost:8847/.well-known/oauth-authorization-server | python3 -m json.tool
+```
+
+Expected: JSON with `issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`.
+
+**5. Register a test client:**
+
+```bash
+curl -s -X POST http://localhost:8847/register \
+  -H "Content-Type: application/json" \
+  -d '{"client_name":"test","redirect_uris":["http://localhost:3000/cb"]}' | python3 -m json.tool
+```
+
+Copy the `client_id` from the response.
+
+**6. Open the login page in a browser:**
+
+```
+http://localhost:8847/authorize?response_type=code&client_id=<client-id>&redirect_uri=http://localhost:3000/cb&state=test123&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
+```
+
+You should see the login page with a "Sign in with Google" button (or whichever providers you configured).
+
+### Apple Sign-In notes
+
+Apple uses JWT-based client secrets instead of static strings. To use Apple Sign-In:
+
+1. Create a Services ID in the Apple Developer portal
+2. Create a private key (Keys section) with Sign In with Apple enabled
+3. Generate a JWT client secret from the private key (valid for up to 6 months)
+4. Set `OAUTH_APPLE_CLIENT_SECRET` to the generated JWT string
+5. Apple callbacks use POST (not GET), which the server handles
+
+The current implementation accepts the JWT as a static string in `.env`. You must regenerate it before it expires.
 
 ---
 

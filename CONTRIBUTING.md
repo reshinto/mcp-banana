@@ -153,14 +153,16 @@ All checks must pass before a PR can be merged.
 
 ## OAuth Development Setup
 
-OAuth requires real provider credentials for end-to-end testing. For local development that does not involve OAuth, use bearer token authentication — it works without a domain, TLS certificate, or provider credentials.
+OAuth requires real provider credentials for end-to-end testing. For local development that does not involve OAuth, use bearer token authentication or per-user API keys — both work without a domain, TLS certificate, or provider credentials.
 
 To test the OAuth flow locally:
 
-1. Register a test application with at least one provider. See [docs/authentication.md](docs/authentication.md) for provider console links.
-2. Set the redirect URI to `http://localhost:8847/callback` — most providers allow `localhost` callbacks.
-3. Set `OAUTH_BASE_URL=http://localhost:8847` in your local `.env`. TLS is not required for `localhost`.
-4. Run the server with `make run-http` and open `http://localhost:8847/authorize` to test the flow.
+1. Register a test application with **Google** or **GitHub** (both support `http://localhost` callbacks). See [docs/setup-and-operations.md](docs/setup-and-operations.md#local-oauth-testing) for step-by-step instructions.
+2. Set the redirect URI to `http://localhost:8847/callback`.
+3. Set `OAUTH_BASE_URL=http://localhost:8847` and the provider credentials in your local `.env`.
+4. Restart the server with `./scripts/run-docker-dev.sh` and open the authorize URL in a browser.
+
+**Apple Sign-In cannot be tested locally.** Apple requires HTTPS with a registered domain and a JWT-based client secret generated from a private key. Test Apple only on the production server.
 
 Do not commit provider credentials. Keep them in your local `.env`, which is excluded by `.gitignore`.
 
