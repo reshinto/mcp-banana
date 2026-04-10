@@ -13,6 +13,11 @@
 # The script stops immediately if any step fails. Docker will not start
 # unless all prerequisites are met.
 #
+# Compatible with:
+#   - Docker Compose V2 plugin (docker compose)
+#   - Docker Compose V1 standalone (docker-compose)
+#   - Docker 19.03+
+#
 # Prerequisites:
 #   - Docker and Docker Compose installed
 #   - .env file with MCP_DOMAIN set
@@ -23,6 +28,22 @@ cd "$(dirname "$0")/.."
 
 echo "=== mcp-banana production deployment ==="
 echo ""
+
+# --- Detect docker compose command ---
+# Docker Compose V2 (plugin): "docker compose"
+# Docker Compose V1 (standalone): "docker-compose"
+COMPOSE_CMD=""
+if docker compose version &>/dev/null; then
+  COMPOSE_CMD="docker compose"
+elif command -v docker-compose &>/dev/null; then
+  COMPOSE_CMD="docker-compose"
+else
+  echo "FAILED: Docker Compose is not installed." >&2
+  echo "  Docker Compose V2: sudo apt-get install -y docker-compose-plugin" >&2
+  echo "  Docker Compose V1: sudo apt-get install -y docker-compose" >&2
+  exit 1
+fi
+echo "[ok] Using: ${COMPOSE_CMD} ($(${COMPOSE_CMD} version --short 2>/dev/null || ${COMPOSE_CMD} --version 2>/dev/null | grep -oP '[\d.]+' | head -1))"
 
 # --- Step 1: Validate .env exists ---
 if [ ! -f .env ]; then
@@ -51,15 +72,10 @@ echo "[ok] MCP_DOMAIN=${DOMAIN}"
 # --- Step 3: Validate Docker is installed ---
 if ! command -v docker &>/dev/null; then
   echo "FAILED: Docker is not installed." >&2
-  echo "  Install: sudo apt-get install -y docker.io docker-compose-plugin" >&2
+  echo "  Install: sudo apt-get install -y docker.io" >&2
   exit 1
 fi
-if ! docker compose version &>/dev/null; then
-  echo "FAILED: Docker Compose is not available." >&2
-  echo "  Install: sudo apt-get install -y docker-compose-plugin" >&2
-  exit 1
-fi
-echo "[ok] Docker and Docker Compose installed"
+echo "[ok] Docker installed ($(docker --version | grep -oP '[\d.]+' | head -1))"
 
 # --- Step 4: Auto-populate .env fields ---
 UPDATED_ENV=false
@@ -157,7 +173,7 @@ echo "[ok] fullchain.pem and privkey.pem exist"
 # --- Step 7: Build and start Docker ---
 echo ""
 echo "Building and starting mcp-banana (production, 0.0.0.0:8847, ${DOMAIN})..."
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 # --- Step 8: Wait for health check ---
 echo ""
@@ -171,7 +187,7 @@ for attempt in $(seq 1 $MAX_RETRIES); do
   fi
   if [ "$attempt" -eq "$MAX_RETRIES" ]; then
     echo "FAILED: Server did not become healthy after $((MAX_RETRIES * RETRY_INTERVAL)) seconds." >&2
-    echo "  Check logs: docker compose -f docker-compose.yml -f docker-compose.prod.yml logs" >&2
+    echo "  Check logs: ${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml logs" >&2
     exit 1
   fi
   sleep $RETRY_INTERVAL
@@ -183,5 +199,5 @@ echo "=== Deployment successful ==="
 echo ""
 echo "  Server:       https://${DOMAIN}:8847"
 echo "  Health check: curl -k https://${DOMAIN}:8847/healthz"
-echo "  Logs:         docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f"
-echo "  Stop:         docker compose -f docker-compose.yml -f docker-compose.prod.yml down"
+echo "  Logs:         ${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml logs -f"
+echo "  Stop:         ${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml down"
