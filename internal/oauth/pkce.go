@@ -20,9 +20,10 @@ func VerifyCodeChallenge(challenge string, verifier string, method string) bool 
 	return challenge == expected
 }
 
-// GenerateRandomToken produces a cryptographically random hex-encoded token
-// of the specified byte length.
-func GenerateRandomToken(byteLength int) (string, error) {
+// GenerateRandomToken is a package-level variable holding the function used to produce
+// a cryptographically random hex-encoded token of the specified byte length.
+// It is a var so tests can inject a failing implementation to exercise error paths.
+var GenerateRandomToken = func(byteLength int) (string, error) {
 	randomBytes := make([]byte, byteLength)
 	_, readError := rand.Read(randomBytes)
 	if readError != nil {
