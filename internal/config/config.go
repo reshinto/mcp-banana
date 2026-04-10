@@ -126,6 +126,13 @@ func Load() (*Config, error) {
 	cfg.OAuthAppleClientID = os.Getenv("OAUTH_APPLE_CLIENT_ID")
 	cfg.OAuthAppleClientSecret = os.Getenv("OAUTH_APPLE_CLIENT_SECRET")
 	cfg.OAuthBaseURL = os.Getenv("OAUTH_BASE_URL")
+	// Auto-derive OAUTH_BASE_URL from MCP_DOMAIN if not explicitly set
+	if cfg.OAuthBaseURL == "" {
+		mcpDomain := os.Getenv("MCP_DOMAIN")
+		if mcpDomain != "" {
+			cfg.OAuthBaseURL = "https://" + mcpDomain + ":8847"
+		}
+	}
 
 	// TLS configuration (both required together, or neither)
 	cfg.TLSCertFile = os.Getenv("MCP_TLS_CERT_FILE")

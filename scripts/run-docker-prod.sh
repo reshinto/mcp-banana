@@ -29,7 +29,7 @@ set +a
 DOMAIN="${MCP_DOMAIN:-}"
 if [ -z "$DOMAIN" ]; then
   echo "ERROR: MCP_DOMAIN is not set in .env" >&2
-  echo "  Example: MCP_DOMAIN=mcp.terencekong.net" >&2
+  echo "  Example: MCP_DOMAIN=mcp.yourdomain.com" >&2
   exit 1
 fi
 
