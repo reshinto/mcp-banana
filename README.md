@@ -2,6 +2,10 @@
 
 A Go MCP server that gives Claude Code access to Google's Gemini image generation and editing API.
 
+## Demo
+
+![Demo](docs/assets/demo.png)
+
 ## Overview
 
 mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
@@ -17,15 +21,40 @@ mcp-banana implements the Model Context Protocol (MCP) to expose four image gene
 
 ## Quick Start
 
+**1. Clone and configure**
+
 ```bash
 git clone https://github.com/reshinto/mcp-banana.git && cd mcp-banana
-make build
-export GEMINI_API_KEY="AIza..."
-# Verify model IDs in internal/gemini/registry.go first -- see docs/models.md
-./mcp-banana --transport stdio
+cp .env.example .env
+# Edit .env and set GEMINI_API_KEY, MCP_AUTH_TOKEN
+# Generate a mcp auth token with: openssl rand -hex 32
 ```
 
-See [Claude Code Integration](docs/claude-code-integration.md) for full setup instructions.
+**2. Start the server**
+
+```bash
+docker compose up -d
+```
+
+**3. Add the MCP server to Claude Code**
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://<server-ip>:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>"
+  }
+}'
+```
+
+**4. Generate an image**
+
+Ask Claude Code:
+
+> "Generate an image of a cute cat sitting on a cozy blanket"
+
+See [Claude Code Integration](docs/claude-code-integration.md) for full setup instructions including stdio mode, SSH tunnels, and troubleshooting.
 
 ## Documentation
 

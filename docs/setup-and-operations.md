@@ -143,10 +143,40 @@ docker compose up -d --build
 
 The container:
 - Runs in HTTP mode on `0.0.0.0:8847` inside the container
-- Binds to `127.0.0.1:8847` on the host (loopback only, not public)
+- Binds to the host address configured in the `ports` section of `docker-compose.yml` (see below)
 - Restarts automatically on failure (`restart: unless-stopped`)
 - Has a 120-second graceful shutdown period (`stop_grace_period: 120s`)
 - Is limited to 768 MB of memory
+
+### Port Binding: Loopback vs Public
+
+The `ports` field in `docker-compose.yml` controls which network interfaces accept connections. Choose the mode that matches your deployment:
+
+| Mode | `ports` value | Accessible from | Use when |
+|---|---|---|---|
+| **Loopback** (default) | `"127.0.0.1:8847:8847"` | Localhost only | Accessing via SSH tunnel; most secure |
+| **Public** | `"0.0.0.0:8847:8847"` | Any network interface | Direct remote access without SSH tunnel |
+
+**Loopback mode** (`127.0.0.1`) is the safer default. The port is only reachable from the server itself, so remote clients must connect through an SSH tunnel (see [authentication.md](authentication.md)). This prevents unauthorized access even if `MCP_AUTH_TOKEN` is not set.
+
+**Public mode** (`0.0.0.0`) exposes the port to all network interfaces, allowing direct connections from any machine that can reach the server's IP. This is simpler to set up but requires `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS_FILE` to be configured in `.env` — without authentication, anyone on the network can call the MCP endpoint.
+
+To switch between modes, edit `docker-compose.yml`:
+
+```yaml
+ports:
+  # Loopback only (SSH tunnel required for remote access)
+  - "127.0.0.1:8847:8847"
+
+  # Public (direct remote access, requires MCP_AUTH_TOKEN)
+  # - "0.0.0.0:8847:8847"
+```
+
+After changing, rebuild:
+
+```bash
+docker compose up -d --build --force-recreate
+```
 
 **Step 8: Verify health**
 
