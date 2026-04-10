@@ -9,7 +9,7 @@ Authentication in HTTP mode is optional. Three auth methods and per-user API key
 | **No auth (SSH tunnel)** | Server reachable only via SSH tunnel | Nothing — auth is skipped |
 | **Bearer token** | Solo developer or small trusted team | `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS_FILE` |
 | **OAuth 2.1** | Claude Desktop GUI integration | `OAUTH_BASE_URL` + provider credentials |
-| **Per-user Gemini keys** | Each user bills their own Gemini quota | `X-Gemini-API-Key` header per request |
+| **Per-user Gemini keys** | Claude Code users bill their own Gemini quota | `X-Gemini-API-Key` header (Claude Code only — not supported by Claude Desktop) |
 
 If neither `MCP_AUTH_TOKEN` nor `MCP_AUTH_TOKENS_FILE` is set, the server logs a warning and runs without bearer token auth. This is safe when all access goes through an SSH tunnel.
 
@@ -338,23 +338,55 @@ You should see the login page with a "Sign in with Google" button (or whichever 
 
 ---
 
-## Per-User Gemini API Keys
+## Gemini API Key: Claude Code vs Claude Desktop
 
-Any authenticated HTTP request can supply a personal Gemini API key via the `X-Gemini-API-Key` request header:
+The Gemini API key is required for image generation. How it's provided depends on which client you use.
 
+### Claude Code (CLI)
+
+Claude Code lets you set custom HTTP headers in your MCP config. You can provide your Gemini API key per-user via the `X-Gemini-API-Key` header:
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.yourdomain.com:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
+  }
+}'
 ```
-X-Gemini-API-Key: AIza...
+
+Each Claude Code user sends their own key. The server does not need `GEMINI_API_KEY` set in `.env` — the per-request header is sufficient.
+
+### Claude Desktop (GUI)
+
+Claude Desktop uses OAuth to authenticate. It controls the HTTP requests and **does not support custom headers** like `X-Gemini-API-Key`. This means Claude Desktop users cannot send their own Gemini key.
+
+For Claude Desktop, you **must** set `GEMINI_API_KEY` in the server's `.env` file. All Claude Desktop users share this server-side key.
+
+```bash
+# In .env on the production server
+GEMINI_API_KEY=AIza...
 ```
 
-The server uses the per-request key for that call instead of the server's `GEMINI_API_KEY`. The key is registered with the output sanitizer immediately — it is never echoed back in responses or logs.
+### Summary
 
-This is useful in multi-user deployments where each developer has their own Gemini quota. The `X-Gemini-API-Key` header works with all three auth options above.
+| Client | How Gemini key is provided | Server `GEMINI_API_KEY` needed? |
+|---|---|---|
+| **Claude Code** | Per-user via `X-Gemini-API-Key` header | No — each user sends their own |
+| **Claude Desktop** | Server-side default in `.env` | **Yes** — all users share it |
+| **Both clients** | Header overrides server default | Yes — Claude Desktop needs it as fallback |
 
-**How it works internally:**
+If you support both Claude Code and Claude Desktop users, set `GEMINI_API_KEY` in `.env` for Claude Desktop, and Claude Code users can optionally override it with their own key via the header.
 
-1. The HTTP middleware extracts the key and registers it as a secret.
-2. The key is stored in the request context using a package-private context key.
-3. The tool handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user client or creates a new one.
-4. If no per-request key is provided, the default server-level client (from `GEMINI_API_KEY`) is used.
+### How it works internally
+
+1. The HTTP middleware extracts `X-Gemini-API-Key` from the request header (if present).
+2. The key is registered with the output sanitizer — it never appears in responses or logs.
+3. The key is stored in the request context using a package-private context key.
+4. The tool handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user client or creates a new one.
+5. If no per-request key is provided, the default server-level client (from `GEMINI_API_KEY`) is used.
+6. If neither is available, the tool returns an error: `"no API key configured"`.
 
 For the Claude Code command that includes this header, see [Claude Code Integration](claude-code-integration.md).
