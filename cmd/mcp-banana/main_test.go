@@ -563,3 +563,84 @@ func TestRun_HTTPListenError(test *testing.T) {
 		test.Fatalf("expected exit code 1, got %d", exitCode)
 	}
 }
+
+// --- OAuth store creation (run path with providers) ---
+
+// TestRun_OAuthStoreCreatedWhenProvidersConfigured verifies that when at least one
+// OAuth provider is configured, an oauth.Store is created and the cleanup goroutine
+// is started. The test uses the stdio transport so it exits quickly and uses a
+// very short cleanup interval to exercise the goroutine body (CleanupExpired call).
+func TestRun_OAuthStoreCreatedWhenProvidersConfigured(test *testing.T) {
+	setupServerEnv(test)
+	// Set both ID and secret so BuildActiveProviders returns at least one provider.
+	test.Setenv("OAUTH_GOOGLE_CLIENT_ID", "google-client-id-test")
+	test.Setenv("OAUTH_GOOGLE_CLIENT_SECRET", "google-client-secret-test")
+	withMockStdio(test, nil)
+
+	// Set a very short cleanup interval so the goroutine fires during this test.
+	originalInterval := oauthCleanupInterval
+	test.Cleanup(func() { oauthCleanupInterval = originalInterval })
+	oauthCleanupInterval = 1 * time.Millisecond
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 0 {
+		test.Fatalf("expected exit code 0 with OAuth providers configured, got %d; stderr: %s", exitCode, stderr.String())
+	}
+
+	// Give the cleanup goroutine a moment to fire before the test exits.
+	time.Sleep(10 * time.Millisecond)
+}
+
+// --- TLS: runHealthCheck ---
+
+// TestRunHealthCheck_TLSPath verifies that when MCP_TLS_CERT_FILE is set, the health
+// check uses HTTPS (which will fail to connect since no real TLS server is running,
+// but the code path through the TLS transport setup is exercised).
+func TestRunHealthCheck_TLSPath(test *testing.T) {
+	// Set the env var so runHealthCheck switches to the HTTPS path.
+	test.Setenv("MCP_TLS_CERT_FILE", "/tmp/fake-cert.pem")
+
+	var stderr bytes.Buffer
+	// 127.0.0.1:1 — nothing is listening, so the HTTPS GET will fail immediately.
+	exitCode := runHealthCheck("127.0.0.1:1", &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1 for TLS health check to closed port, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "health check failed") {
+		test.Errorf("expected health check error message, got: %q", stderr.String())
+	}
+}
+
+// --- TLS: runHTTPServer ---
+
+// TestRun_HTTPTLSServeError verifies that when TLS cert and key paths are set but
+// invalid, ServeTLS fails and runHTTPServer returns exit code 1.
+func TestRun_HTTPTLSServeError(test *testing.T) {
+	setupServerEnv(test)
+	test.Setenv("MCP_TLS_CERT_FILE", "/tmp/nonexistent-cert.pem")
+	test.Setenv("MCP_TLS_KEY_FILE", "/tmp/nonexistent-key.pem")
+
+	listener, listenError := net.Listen("tcp", "127.0.0.1:0")
+	if listenError != nil {
+		test.Fatalf("failed to create listener: %v", listenError)
+	}
+	listenerAddress := listener.Addr().String()
+	_ = listener.Close()
+
+	withMockListener(test, nil, nil)
+
+	original := listenFunc
+	test.Cleanup(func() { listenFunc = original })
+	listenFunc = func(_, _ string) (net.Listener, error) {
+		return net.Listen("tcp", listenerAddress)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "http", "--addr", listenerAddress}, &stdout, &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1 for TLS with invalid cert/key paths, got %d; stderr: %s", exitCode, stderr.String())
+	}
+}

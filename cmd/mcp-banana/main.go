@@ -121,8 +121,9 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	var oauthStore *oauth.Store
 	if len(providers) > 0 {
 		oauthStore = oauth.NewStore()
+		cleanupInterval := oauthCleanupInterval
 		go func() {
-			ticker := time.NewTicker(5 * time.Minute)
+			ticker := time.NewTicker(cleanupInterval)
 			defer ticker.Stop()
 			for range ticker.C {
 				oauthStore.CleanupExpired()
@@ -193,6 +194,9 @@ var listenFunc = func(network, address string) (net.Listener, error) {
 
 // shutdownTimeout is the graceful shutdown duration. Overridden in tests.
 var shutdownTimeout = 120 * time.Second
+
+// oauthCleanupInterval is the interval between OAuth store cleanup runs. Overridden in tests.
+var oauthCleanupInterval = 5 * time.Minute
 
 // runHTTPServer starts the HTTP server with graceful shutdown.
 // When TLSCertFile and TLSKeyFile are both set in serverConfig, the server
