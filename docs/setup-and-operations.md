@@ -127,17 +127,17 @@ Register your server as an OAuth application with each provider you want to supp
 **Google** — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
 
 Create an OAuth 2.0 Client ID. Set the authorized redirect URI to:
-`https://banana.yourdomain.com:8847/oauth/callback/google`
+`https://banana.yourdomain.com:8847/callback`
 
 **GitHub** — [github.com/settings/developers](https://github.com/settings/developers)
 
 Create a new OAuth App. Set the authorization callback URL to:
-`https://banana.yourdomain.com:8847/oauth/callback/github`
+`https://banana.yourdomain.com:8847/callback`
 
 **Apple** — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
 
 Register a Services ID. Set the return URL to:
-`https://banana.yourdomain.com:8847/oauth/callback/apple`
+`https://banana.yourdomain.com:8847/callback`
 
 Add the credentials to `.env`:
 
