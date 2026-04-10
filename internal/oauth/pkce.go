@@ -1,3 +1,5 @@
+// Package oauth provides OAuth 2.1 authorization support for Claude Desktop integration,
+// including PKCE verification, token management, provider delegation, and dynamic client registration.
 package oauth
 
 import (
