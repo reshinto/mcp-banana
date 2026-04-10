@@ -91,6 +91,24 @@ claude mcp get banana
 
 Both commands should show the `banana` server entry. If configured correctly and model IDs are verified, Claude Code will be able to call all four tools.
 
+## Scope Conflicts
+
+Claude Code resolves MCP servers by name. If the same server name (e.g. `banana`) exists in both project scope (`.mcp.json`) and user scope (`~/.claude.json`), the project-scoped entry takes precedence. This means `claude mcp get banana` and `claude mcp list` may show different results — `list` checks connectivity across all scopes, while `get` returns the highest-priority match.
+
+**Common scenario:** You add an HTTP config with `--scope user`, but the repo already has a stdio config in `.mcp.json`. `claude mcp list` shows the HTTP entry as connected, but `claude mcp get banana` shows the project-scoped stdio entry (which may be failing).
+
+**Fix:** Remove the entry from the scope you do not want:
+
+```bash
+# Remove the project-scoped stdio entry, keep the user-scoped HTTP entry
+claude mcp remove banana --scope project
+
+# Or remove the user-scoped entry, keep the project-scoped one
+claude mcp remove banana --scope user
+```
+
+After removing the conflicting entry, verify with `claude mcp get banana`.
+
 ## Troubleshooting
 
 | Symptom | Likely Cause | Fix |
@@ -102,6 +120,7 @@ Both commands should show the `banana` server entry. If configured correctly and
 | `Connection refused` on HTTP mode | SSH tunnel not running or server is down | Start the tunnel or check the server with `curl http://localhost:8847/healthz` |
 | Server starts but tools return errors | Gemini API issue or quota exceeded | Check `docker compose logs -f mcp-banana` on the remote server |
 | Binary not found | `mcp-banana` not on PATH | Use the full absolute path in `command`, or copy the binary to `/usr/local/bin/` |
+| `claude mcp get banana` shows wrong config (e.g. stdio instead of HTTP) | Duplicate `banana` entries in different scopes — project-scoped `.mcp.json` shadows user-scoped `~/.claude.json` | Remove the conflicting scope: `claude mcp remove banana --scope project` or `claude mcp remove banana --scope user` |
 
 See [troubleshooting.md](troubleshooting.md) for additional common issues and debugging steps.
 

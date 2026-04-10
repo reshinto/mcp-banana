@@ -1,9 +1,3 @@
 {
-  "mcpServers": {
-    "banana": {
-      "command": "${MCP_BANANA_BIN:-mcp-banana}",
-      "args": ["--transport", "stdio"],
-      "type": "stdio"
-    }
-  }
+  "mcpServers": {}
 }

@@ -124,11 +124,10 @@ func buildGenerateInputs(prompt string, modelID string, aspectRatio string) (mod
 	}
 
 	config = &genai.GenerateContentConfig{
-		ResponseMIMEType: "image/png",
+		ResponseModalities: []string{"TEXT", "IMAGE"},
 	}
 
 	if aspectRatio != "" {
-		config.ResponseMIMEType = "image/png"
 		// Aspect ratio is conveyed via system instruction as the SDK does not have
 		// a dedicated aspect ratio field for GenerateContent (it does for GenerateImages).
 		config.SystemInstruction = genai.NewContentFromText(
@@ -160,7 +159,7 @@ func buildEditInputs(instructions string, modelID string, imageData []byte, mime
 	}
 
 	config = &genai.GenerateContentConfig{
-		ResponseMIMEType: "image/png",
+		ResponseModalities: []string{"TEXT", "IMAGE"},
 	}
 
 	return modelName, contents, config
