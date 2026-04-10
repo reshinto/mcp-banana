@@ -153,7 +153,7 @@ The container also runs an internal health check every 30 seconds using `mcp-ban
 
 ## CI/CD Pipeline
 
-![CI/CD Pipeline](diagrams/ci-cd-pipeline.svg)
+![CI/CD Pipeline](diagrams/ci-cd-pipeline.png)
 
 ### Continuous Integration
 

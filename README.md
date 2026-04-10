@@ -6,7 +6,7 @@ A Go MCP server that gives Claude Code access to Google's Gemini image generatio
 
 mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
 
-![Architecture](docs/diagrams/high-level-architecture.svg)
+![Architecture](docs/diagrams/high-level-architecture.png)
 
 ## Tools
 

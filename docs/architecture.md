@@ -8,7 +8,7 @@ The server is organized around a security-first principle: secrets never cross t
 
 ## High-Level Architecture
 
-![High-Level Architecture](diagrams/high-level-architecture.svg)
+![High-Level Architecture](diagrams/high-level-architecture.png)
 
 ## Package Layout
 
@@ -24,7 +24,7 @@ The server is organized around a security-first principle: secrets never cross t
 
 ## Package Dependencies
 
-![Package Dependencies](diagrams/package-dependencies.svg)
+![Package Dependencies](diagrams/package-dependencies.png)
 
 The dependency graph is strictly layered:
 
@@ -38,7 +38,7 @@ There are no circular imports. Internal packages are never imported by packages 
 
 ## Request Flow
 
-![Request Flow](diagrams/request-flow.svg)
+![Request Flow](diagrams/request-flow.png)
 
 ### HTTP Transport
 
@@ -59,7 +59,7 @@ In stdio mode the middleware chain is not used. Claude Code launches the `mcp-ba
 
 ## Startup Sequence
 
-![Startup Sequence](diagrams/startup-sequence.svg)
+![Startup Sequence](diagrams/startup-sequence.png)
 
 The startup sequence in `cmd/mcp-banana/main.go` follows a strict fail-fast order:
 
@@ -75,7 +75,7 @@ The startup sequence in `cmd/mcp-banana/main.go` follows a strict fail-fast orde
 
 ## Security Boundaries
 
-![Security Boundaries](diagrams/security-boundaries.svg)
+![Security Boundaries](diagrams/security-boundaries.png)
 
 Three distinct trust zones exist:
 
@@ -87,7 +87,7 @@ Secrets cross no boundary: `GEMINI_API_KEY` flows only from the environment into
 
 ## Middleware Chain
 
-![Middleware Chain](diagrams/middleware-chain.svg)
+![Middleware Chain](diagrams/middleware-chain.png)
 
 The middleware chain is defined in `internal/server/middleware.go`. It is applied to the entire HTTP handler via `mw.WrapHTTP()`, with `/healthz` bypassing all security middleware. Each layer is a closure that calls the next handler or short-circuits with a JSON error response.
 

@@ -6,7 +6,7 @@ mcp-banana exposes three model aliases. Each alias maps to an internal Gemini mo
 
 ## Model Aliases
 
-![Model Recommendation Logic](diagrams/model-recommendation.svg)
+![Model Recommendation Logic](diagrams/model-recommendation.png)
 
 | Alias | Typical Latency | Best For | Description |
 |---|---|---|---|

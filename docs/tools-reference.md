@@ -192,7 +192,7 @@ Results are sorted alphabetically by `id`. The array is never empty; at least on
 
 Recommend a model alias based on a task description and optional priority.
 
-![Model Recommendation Logic](diagrams/model-recommendation.svg)
+![Model Recommendation Logic](diagrams/model-recommendation.png)
 
 ### Parameters
 

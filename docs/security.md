@@ -6,7 +6,7 @@ mcp-banana implements a defense-in-depth security model. Secrets are isolated in
 
 ## Security Boundaries
 
-![Security Boundaries](diagrams/security-boundaries.svg)
+![Security Boundaries](diagrams/security-boundaries.png)
 
 Three trust zones exist:
 
@@ -16,7 +16,7 @@ Three trust zones exist:
 
 ## Middleware Chain
 
-![Middleware Chain](diagrams/middleware-chain.svg)
+![Middleware Chain](diagrams/middleware-chain.png)
 
 In HTTP mode every request passes through the following layers. `/healthz` is the only path that bypasses this chain.
 
