@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -203,7 +204,13 @@ func TestRun_RegistryValidationFails(test *testing.T) {
 	withCleanSecrets(test)
 	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 
-	// Use the real registry validator (sentinel IDs are present).
+	// Override the registry validator to simulate a sentinel ID failure.
+	original := registryValidator
+	test.Cleanup(func() { registryValidator = original })
+	registryValidator = func() error {
+		return fmt.Errorf("model %q has unverified GeminiID -- verify at https://ai.google.dev/gemini-api/docs/models before release", "test-model")
+	}
+
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := run([]string{}, &stdout, &stderr)

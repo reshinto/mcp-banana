@@ -39,29 +39,15 @@ type SafeModelInfo struct {
 
 // registry is the single source of truth for model alias-to-ID mapping.
 //
-// IMPORTANT: The GeminiID values MUST be verified against the live Gemini
-// API model catalog before release. The sentinel value
-// `VERIFY_MODEL_ID_BEFORE_RELEASE` will cause a startup failure (see
-// ValidateRegistryAtStartup) to prevent accidental deployment with
-// unverified IDs.
-//
-// To verify: call the Gemini models.list API or check
-// https://ai.google.dev/gemini-api/docs/models
-//
-// Expected mappings to verify before release:
-//
-//	nano-banana-2   -> gemini-3.1-flash-image-preview
-//	nano-banana-pro -> gemini-3-pro-image-preview
-//
-// nano-banana-original is a PROJECT-INTERNAL alias (not an official
-// Google model name) for the speed-optimized Nano Banana model, which
-// Google documents as backed by gemini-2.5-flash-image. This alias is
-// PROVISIONAL -- if no confirmed Gemini model ID can be verified for it,
-// remove it from the registry before release.
+// IMPORTANT: The GeminiID values below were verified against the official
+// Gemini API documentation (https://ai.google.dev/gemini-api/docs/models).
+// The sentinel value `VERIFY_MODEL_ID_BEFORE_RELEASE` will cause a startup
+// failure (see ValidateRegistryAtStartup) to prevent accidental deployment
+// with unverified IDs.
 var registry = map[string]ModelInfo{
 	"nano-banana-2": {
 		Alias:          "nano-banana-2",
-		GeminiID:       "VERIFY_MODEL_ID_BEFORE_RELEASE",
+		GeminiID:       "gemini-3.1-flash-image-preview",
 		Description:    "Fast, high-volume image generation. Under 10 seconds.",
 		Capabilities:   []string{"generate", "edit"},
 		TypicalLatency: "5-10s",
@@ -69,7 +55,7 @@ var registry = map[string]ModelInfo{
 	},
 	"nano-banana-pro": {
 		Alias:          "nano-banana-pro",
-		GeminiID:       "VERIFY_MODEL_ID_BEFORE_RELEASE",
+		GeminiID:       "gemini-3-pro-image-preview",
 		Description:    "Professional quality with advanced reasoning. 15-45 seconds.",
 		Capabilities:   []string{"generate", "edit"},
 		TypicalLatency: "15-45s",
@@ -77,7 +63,7 @@ var registry = map[string]ModelInfo{
 	},
 	"nano-banana-original": {
 		Alias:          "nano-banana-original",
-		GeminiID:       "VERIFY_MODEL_ID_BEFORE_RELEASE",
+		GeminiID:       "gemini-2.5-flash-image",
 		Description:    "Speed and efficiency optimized. 3-8 seconds.",
 		Capabilities:   []string{"generate", "edit"},
 		TypicalLatency: "3-8s",
