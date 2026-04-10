@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -55,10 +56,77 @@ func writeJSONError(writer http.ResponseWriter, statusCode int, errorKey string)
 	writer.Write([]byte(`{"error":"` + errorKey + `"}`)) //nolint:errcheck
 }
 
+// loadTokensFromFile reads a tokens file and returns all non-empty, non-comment
+// lines as a set. The file is re-read on every call so tokens can be updated
+// without restarting the server.
+func loadTokensFromFile(filePath string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	if filePath == "" {
+		return tokens
+	}
+	data, readError := os.ReadFile(filePath)
+	if readError != nil {
+		return tokens
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Skip empty lines and comments
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		tokens[trimmed] = struct{}{}
+	}
+	return tokens
+}
+
+// authenticateRequest checks whether the incoming request has a valid bearer
+// token. Authentication is optional -- if no AuthToken and no AuthTokensFile
+// are configured, all requests pass through (SSH tunnel provides security).
+//
+// Token sources checked in order:
+//  1. AuthTokensFile (re-read on each request for hot-reload)
+//  2. AuthToken (single legacy token from env var)
+//
+// If either source is configured, the request must provide a matching bearer token.
+func (mw *middleware) authenticateRequest(request *http.Request) bool {
+	hasFileTokens := mw.cfg.AuthTokensFile != ""
+	hasSingleToken := mw.cfg.AuthToken != ""
+
+	// No auth configured -- rely on SSH tunnel for security
+	if !hasFileTokens && !hasSingleToken {
+		return true
+	}
+
+	// Extract bearer token from request
+	authHeader := request.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, authHeaderPrefix) {
+		return false
+	}
+	requestToken := authHeader[len(authHeaderPrefix):]
+	if requestToken == "" {
+		return false
+	}
+
+	// Check tokens file first (hot-reloaded on each request)
+	if hasFileTokens {
+		fileTokens := loadTokensFromFile(mw.cfg.AuthTokensFile)
+		if _, exists := fileTokens[requestToken]; exists {
+			return true
+		}
+	}
+
+	// Fall back to single token from env var
+	if hasSingleToken && requestToken == mw.cfg.AuthToken {
+		return true
+	}
+
+	return false
+}
+
 // WrapHTTP wraps next with the full middleware chain:
 //  1. Panic recovery
 //  2. Health check bypass
-//  3. Bearer token auth
+//  3. Bearer token auth (optional -- skipped if no tokens configured)
 //  4. Rate limiting
 //  5. Global concurrency semaphore
 //  6. Oversized body enforcement
@@ -78,17 +146,10 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 			return
 		}
 
-		// 3. Bearer token auth
-		if mw.cfg.AuthToken != "" {
-			authHeader := request.Header.Get("Authorization")
-			var token string
-			if strings.HasPrefix(authHeader, authHeaderPrefix) {
-				token = authHeader[len(authHeaderPrefix):]
-			}
-			if token != mw.cfg.AuthToken {
-				writeJSONError(writer, http.StatusUnauthorized, "unauthorized")
-				return
-			}
+		// 3. Bearer token auth (optional -- skipped when no tokens configured)
+		if !mw.authenticateRequest(request) {
+			writeJSONError(writer, http.StatusUnauthorized, "unauthorized")
+			return
 		}
 
 		// 4. Rate limiting

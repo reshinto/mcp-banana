@@ -19,7 +19,8 @@ import (
 // in any tool response, log output, error message, or health check.
 type Config struct {
 	GeminiAPIKey       string // The Google Gemini API key for authentication
-	AuthToken          string // Bearer token for HTTP transport auth (optional for stdio)
+	AuthToken          string // Single bearer token for HTTP auth (optional, legacy)
+	AuthTokensFile     string // Path to a file with one bearer token per line (optional, hot-reloaded)
 	LogLevel           string // Logging verbosity: "debug", "info", "warn", "error"
 	RateLimit          int    // Maximum requests per minute (default: 30)
 	GlobalConcurrency  int    // Maximum simultaneous requests across all models (default: 8)
@@ -39,6 +40,7 @@ func Load() (*Config, error) {
 	}
 
 	authToken := os.Getenv("MCP_AUTH_TOKEN")
+	authTokensFile := os.Getenv("MCP_AUTH_TOKENS_FILE")
 
 	logLevel := strings.ToLower(os.Getenv("MCP_LOG_LEVEL"))
 	if logLevel == "" {
@@ -94,6 +96,7 @@ func Load() (*Config, error) {
 	return &Config{
 		GeminiAPIKey:       apiKey,
 		AuthToken:          authToken,
+		AuthTokensFile:     authTokensFile,
 		LogLevel:           logLevel,
 		RateLimit:          rateLimit,
 		GlobalConcurrency:  globalConcurrency,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,6 +88,111 @@ func TestMiddlewareMissingBearerToken(test *testing.T) {
 		test.Fatalf("expected 401, got %d", rec.Code)
 	}
 	assertJSONError(test, rec.Body.String(), "unauthorized")
+}
+
+func TestMiddlewareNoAuthConfigured_PassesThrough(test *testing.T) {
+	// When no AuthToken and no AuthTokensFile are set, auth is skipped (SSH tunnel mode)
+	noAuthConfig := &config.Config{
+		AuthToken:         "",
+		AuthTokensFile:    "",
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	handler := buildHandler(noAuthConfig)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnauthorized {
+		test.Fatalf("expected non-401 when no auth configured, got 401")
+	}
+}
+
+func TestMiddlewareTokensFile(test *testing.T) {
+	// Create a temp tokens file with two tokens
+	tokensFile, createError := os.CreateTemp("", "tokens-*.txt")
+	if createError != nil {
+		test.Fatalf("failed to create temp file: %v", createError)
+	}
+	test.Cleanup(func() { _ = os.Remove(tokensFile.Name()) })
+
+	_, _ = tokensFile.WriteString("# This is a comment\nalice-token-abc\nbob-token-def\n")
+	_ = tokensFile.Close()
+
+	fileAuthConfig := &config.Config{
+		AuthToken:         "",
+		AuthTokensFile:    tokensFile.Name(),
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	handler := buildHandler(fileAuthConfig)
+
+	// Valid token from file should pass
+	validReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	validReq.Header.Set("Authorization", "Bearer alice-token-abc")
+	validRec := httptest.NewRecorder()
+	handler.ServeHTTP(validRec, validReq)
+
+	if validRec.Code == http.StatusUnauthorized {
+		test.Fatalf("expected non-401 for valid file token, got 401")
+	}
+
+	// Invalid token should be rejected
+	invalidReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	invalidReq.Header.Set("Authorization", "Bearer unknown-token")
+	invalidRec := httptest.NewRecorder()
+	handler.ServeHTTP(invalidRec, invalidReq)
+
+	if invalidRec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for invalid token with file auth, got %d", invalidRec.Code)
+	}
+}
+
+func TestMiddlewareTokensFileHotReload(test *testing.T) {
+	// Create a temp tokens file with one token
+	tokensFile, createError := os.CreateTemp("", "tokens-*.txt")
+	if createError != nil {
+		test.Fatalf("failed to create temp file: %v", createError)
+	}
+	test.Cleanup(func() { _ = os.Remove(tokensFile.Name()) })
+
+	_, _ = tokensFile.WriteString("initial-token\n")
+	_ = tokensFile.Close()
+
+	fileAuthConfig := &config.Config{
+		AuthTokensFile:    tokensFile.Name(),
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+	}
+	handler := buildHandler(fileAuthConfig)
+
+	// New token should fail initially
+	newReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	newReq.Header.Set("Authorization", "Bearer new-token")
+	newRec := httptest.NewRecorder()
+	handler.ServeHTTP(newRec, newReq)
+
+	if newRec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for token not yet in file, got %d", newRec.Code)
+	}
+
+	// Update the file with the new token (hot reload, no restart)
+	_ = os.WriteFile(tokensFile.Name(), []byte("initial-token\nnew-token\n"), 0644)
+
+	// Now the new token should pass
+	retryReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	retryReq.Header.Set("Authorization", "Bearer new-token")
+	retryRec := httptest.NewRecorder()
+	handler.ServeHTTP(retryRec, retryReq)
+
+	if retryRec.Code == http.StatusUnauthorized {
+		test.Fatalf("expected non-401 after hot-reload, got 401")
+	}
 }
 
 // --- Middleware: rate limit ---

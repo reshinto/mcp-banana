@@ -2,16 +2,13 @@ name: CI
 
 on:
   push:
-    # main is excluded here because cd.yml already invokes ci.yml via
-    # workflow_call on pushes to main, avoiding duplicate CI runs.
     branches:
+      - main
       - 'feat/**'
       - 'fix/**'
       - 'chore/**'
   pull_request:
     branches: [main]
-  # Support reusable invocation from CD workflow (runs on main pushes)
-  workflow_call:
 
 permissions:
   contents: read

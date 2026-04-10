@@ -56,18 +56,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *transport == "http" && serverConfig.AuthToken == "" {
-		fmt.Fprintf(os.Stderr, "MCP_AUTH_TOKEN is required for HTTP transport mode\n")
-		os.Exit(1)
-	}
-
 	if registryError := gemini.ValidateRegistryAtStartup(); registryError != nil {
 		fmt.Fprintf(os.Stderr, "registry validation failed: %s\n", registryError)
 		os.Exit(1)
 	}
 
 	security.RegisterSecret(serverConfig.GeminiAPIKey)
-	security.RegisterSecret(serverConfig.AuthToken)
+	if serverConfig.AuthToken != "" {
+		security.RegisterSecret(serverConfig.AuthToken)
+	}
 
 	var logLevel slog.Level
 	switch serverConfig.LogLevel {
@@ -81,6 +78,10 @@ func main() {
 		logLevel = slog.LevelInfo
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+
+	if *transport == "http" && serverConfig.AuthToken == "" && serverConfig.AuthTokensFile == "" {
+		logger.Warn("HTTP mode: no MCP_AUTH_TOKEN or MCP_AUTH_TOKENS_FILE configured -- auth is disabled, relying on network-level security (SSH tunnel)")
+	}
 
 	startupContext := context.Background()
 	geminiClient, clientError := gemini.NewClient(

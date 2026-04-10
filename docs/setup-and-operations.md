@@ -68,7 +68,8 @@ All configuration is loaded from environment variables at startup. Required valu
 | Variable | Required | Default | Validation Rules |
 |---|---|---|---|
 | `GEMINI_API_KEY` | Yes | - | Non-empty string; registered as a secret |
-| `MCP_AUTH_TOKEN` | HTTP only | - | Non-empty string when transport is HTTP; registered as a secret |
+| `MCP_AUTH_TOKEN` | No | - | Single bearer token for HTTP auth; registered as a secret |
+| `MCP_AUTH_TOKENS_FILE` | No | - | Path to a file with one token per line; hot-reloaded on every request |
 | `MCP_LOG_LEVEL` | No | `info` | Must be one of: `debug`, `info`, `warn`, `error` |
 | `MCP_RATE_LIMIT` | No | `30` | Positive integer; requests per minute |
 | `MCP_GLOBAL_CONCURRENCY` | No | `8` | Positive integer; max simultaneous requests |
@@ -93,59 +94,117 @@ cp .env.example .env
 
 The `.env` file is listed in `.gitignore` and must never be committed.
 
-## Understanding MCP_AUTH_TOKEN
+## Understanding Authentication (Bearer Tokens)
 
-### What It Is
+### Overview
 
-`MCP_AUTH_TOKEN` is a shared secret (bearer token) that authenticates HTTP clients connecting to the mcp-banana server. It works like a password for the API -- every HTTP request to `/mcp` must include it in the `Authorization` header.
+Authentication in HTTP mode is **optional**. There are three approaches, depending on your security needs:
 
-### Why It Is Needed
+| Approach | When to use | Config needed |
+|---|---|---|
+| **SSH tunnel only** (no token) | Server is only reachable via SSH tunnel | Nothing -- auth is skipped |
+| **Single shared token** | Solo developer or small trusted team | `MCP_AUTH_TOKEN` in `.env` |
+| **Per-user tokens file** | Multiple users, individual revocation | `MCP_AUTH_TOKENS_FILE` in `.env` |
 
-In **stdio mode** (local development), security relies on OS process isolation -- Claude Code spawns mcp-banana as a child process and communicates over stdin/stdout. No network port is opened, so no authentication is needed.
+If neither `MCP_AUTH_TOKEN` nor `MCP_AUTH_TOKENS_FILE` is set, the server logs a warning and runs without bearer token auth. This is safe when all access goes through an SSH tunnel.
 
-In **HTTP mode** (remote deployment), the server listens on a network port. Without a bearer token, anyone who can reach that port could call the Gemini API using your API key. The bearer token prevents unauthorized access.
+### Option 1: SSH Tunnel Only (No Token)
 
-### How to Generate One
+If every user connects via SSH tunnel:
 
-The token should be a cryptographically random string. Use OpenSSL:
+```bash
+ssh -N -L 8847:127.0.0.1:8847 user@<droplet-ip>
+```
+
+Then the server port is never exposed publicly. The SSH key is the authentication. No bearer token is needed. Leave `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty in `.env`.
+
+### Option 2: Single Shared Token
+
+For a solo developer or small trusted team. Generate a token:
 
 ```bash
 openssl rand -hex 32
 ```
 
-This produces a 64-character hex string like `a1b2c3d4e5f6...`. There is no required format -- any non-empty string works -- but a 32-byte random hex string provides strong security.
+Put it in the server `.env`:
 
-### Where to Set It
+```
+MCP_AUTH_TOKEN=a1b2c3d4e5f6...
+```
 
-1. **On the server:** Add it to the `.env` file:
-   ```
-   MCP_AUTH_TOKEN=a1b2c3d4e5f6...your-generated-token...
-   ```
+Each client includes the same token in their Claude Code config:
 
-2. **On the client (Claude Code):** Include it in the MCP server configuration:
-   ```bash
-   claude mcp add-json --scope user banana '{
-     "type": "http",
-     "url": "http://localhost:8847/mcp",
-     "headers": {
-       "Authorization": "Bearer a1b2c3d4e5f6...your-generated-token..."
-     }
-   }'
-   ```
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "http://localhost:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer a1b2c3d4e5f6..."
+  }
+}'
+```
 
-The token on the server and client must match exactly. If they do not match, the server returns `401 {"error":"unauthorized"}`.
+Downside: if you rotate this token, you must update every client. If you revoke it, everyone loses access.
+
+### Option 3: Per-User Tokens File (Recommended for Teams)
+
+Create a tokens file on the server with one token per line:
+
+```bash
+# On the server:
+nano /opt/mcp-banana/tokens.txt
+```
+
+File contents:
+
+```
+# Alice - generated 2026-04-10
+a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+# Bob - generated 2026-04-10
+f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5
+```
+
+Set the path in `.env`:
+
+```
+MCP_AUTH_TOKENS_FILE=/opt/mcp-banana/tokens.txt
+```
+
+Each user gets their own token for their Claude Code config. To add or remove a user, edit `tokens.txt` -- **the file is re-read on every request, so changes take effect immediately without restarting the server or Docker container**.
+
+To generate a token for a new user:
+
+```bash
+openssl rand -hex 32
+```
+
+Add the output as a new line in `tokens.txt`. Give the token to the user. Done.
+
+To revoke a user: delete their line from `tokens.txt`. Their next request will be rejected.
+
+### How Token Auth Works
+
+```
+Client (Claude Code)
+  sends: Authorization: Bearer <token>
+    |
+    v
+Middleware checks:
+  1. Is MCP_AUTH_TOKENS_FILE set? Read the file, check if token is in it.
+  2. Is MCP_AUTH_TOKEN set? Check if token matches.
+  3. Neither set? Skip auth (SSH tunnel mode).
+    |
+    v
+Match found -> request proceeds
+No match -> 401 {"error":"unauthorized"}
+```
 
 ### Security Properties
 
-- The token is registered with the sanitizer at startup via `security.RegisterSecret()`, so it is automatically redacted from all logs and error output.
-- The token is compared using constant-time string comparison in the middleware to prevent timing attacks.
-- To rotate the token, run `make rotate-token` which generates a new one and prints update instructions for both server and client.
-- The token is never stored in GitHub -- it lives only in the server's `.env` file and in each user's Claude Code config (`~/.claude.json`).
-
-### When It Is Not Needed
-
-- **Stdio transport:** No token required. The server ignores `MCP_AUTH_TOKEN` in stdio mode.
-- **Health check endpoint:** `GET /healthz` is exempt from token authentication so Docker health checks and monitoring tools can probe the server without credentials.
+- Tokens from `MCP_AUTH_TOKEN` are registered with the sanitizer at startup, so they are redacted from logs.
+- `GET /healthz` is always exempt from token auth so Docker health checks work without credentials.
+- Tokens in the file are not registered with the sanitizer (they change dynamically), but error responses never include token values regardless.
+- To rotate tokens: update the tokens file (no restart needed), then give users their new tokens.
 
 ---
 
@@ -220,7 +279,7 @@ adduser deploy
 usermod -aG docker deploy
 ```
 
-This user is what the CD workflow uses via SSH. Add your deployment SSH public key to `/home/deploy/.ssh/authorized_keys`.
+Add your SSH public key to `/home/deploy/.ssh/authorized_keys`.
 
 ### Step 4: Clone the Repository
 
@@ -231,7 +290,7 @@ sudo chown -R deploy:deploy /opt/mcp-banana
 cd /opt/mcp-banana
 ```
 
-The CD workflow also handles the initial clone automatically if `/opt/mcp-banana` does not exist. But doing it manually ensures you can verify the setup.
+Doing this manually ensures you can verify the setup before running Docker.
 
 ### Step 5: Configure Environment
 
@@ -298,17 +357,14 @@ Common startup failures:
 - `model registry validation failed` -- sentinel IDs not replaced (see Step 6)
 - `MCP_AUTH_TOKEN is required for HTTP transport mode` -- `MCP_AUTH_TOKEN` not set in `.env`
 
-## CI/CD Pipeline
+## CI Pipeline
 
-![CI/CD Pipeline](diagrams/ci-cd-pipeline.png)
+![CI Pipeline](diagrams/ci-cd-pipeline.png)
 
-### Continuous Integration
+CI runs automatically via GitHub Actions (`.github/workflows/ci.yml`) on:
 
-CI runs on:
-
-- Pushes to `feat/**`, `fix/**`, `chore/**` branches
+- Pushes to `main`, `feat/**`, `fix/**`, `chore/**` branches
 - Pull requests to `main`
-- Called automatically by the CD workflow on pushes to `main`
 
 Steps (must all pass before merge):
 
@@ -318,41 +374,44 @@ Steps (must all pass before merge):
 4. `go test -coverprofile=coverage.out -race ./... -v` with 80% coverage threshold
 5. Build the production binary (`CGO_ENABLED=0`, `-ldflags="-s -w"`, `-trimpath`)
 6. Verify binary size is under 15 MB
-7. Build the Docker image (build only; does not run - the sentinel model IDs prevent startup)
+7. Build the Docker image (build only; does not run -- the sentinel model IDs prevent startup)
 8. Verify Docker image size is under 25 MB
 
-Coverage is checked with:
+### Manual Deployment to Production
+
+Deployment to DigitalOcean is done manually via SSH. There is no automated CD pipeline -- you control when production updates happen.
+
 ```bash
-COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
-awk -v cov="$COVERAGE" 'BEGIN { if (cov < 80.0) { print "Coverage below 80%"; exit 1 } }'
+# SSH to the droplet
+ssh deploy@<droplet-ip>
+cd /opt/mcp-banana
+
+# Pull latest code
+git pull origin main
+
+# Rebuild and restart the container
+docker compose up -d --build --force-recreate
+
+# Verify health
+curl http://127.0.0.1:8847/healthz
 ```
 
-### Continuous Deployment
+If the new version fails, roll back:
 
-CD runs on pushes to `main` only. It first invokes the CI workflow via `workflow_call`.
+```bash
+git checkout <previous-commit-sha>
+docker compose up -d --build --force-recreate
+```
 
-The deploy job:
-
-1. Checks out the code and blocks deployment if any sentinel model ID (`VERIFY_MODEL_ID_BEFORE_RELEASE`) is still present in `internal/gemini/registry.go`.
-2. SSH-connects to the DigitalOcean droplet using `DEPLOY_HOST`, `DEPLOY_USER`, and `DEPLOY_SSH_KEY` (GitHub environment secrets in the `production` environment).
-3. On the droplet: records the current commit SHA, pulls new code, rebuilds and restarts the container.
-4. Polls `/healthz` for up to 30 seconds (6 attempts, 5 seconds apart).
-5. On success: prunes old Docker images and exits 0.
-6. On failure: runs a rollback function that resets to the previous SHA, rebuilds, and polls health again. Warns if rollback also fails.
-
-Concurrent deployments are prevented by a `concurrency: group: deploy-production` key with `cancel-in-progress: false`.
-
-### Deployment Secrets
+### Secrets
 
 | Secret | Stored In | Purpose |
 |---|---|---|
-| `DEPLOY_HOST` | GitHub environment secrets | IP or hostname of the production droplet |
-| `DEPLOY_USER` | GitHub environment secrets | SSH username |
-| `DEPLOY_SSH_KEY` | GitHub environment secrets | SSH private key for the deployment user |
 | `GEMINI_API_KEY` | Server `.env` file | Gemini API authentication |
-| `MCP_AUTH_TOKEN` | Server `.env` file | HTTP bearer token |
+| `MCP_AUTH_TOKEN` | Server `.env` file (optional) | Single bearer token for HTTP auth |
+| `MCP_AUTH_TOKENS_FILE` | Server `.env` file (optional) | Path to per-user tokens file |
 
-Application runtime secrets are never stored in GitHub. They live only on the server in `.env`.
+All secrets live only on the server. They are never stored in GitHub or version control.
 
 ## Token Rotation
 
