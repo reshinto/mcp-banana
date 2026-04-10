@@ -510,7 +510,7 @@ func TestRun_HTTPServeError(test *testing.T) {
 		test.Fatalf("failed to create listener: %v", listenError)
 	}
 	listenerAddress := listener.Addr().String()
-	listener.Close() // close it so Serve gets an error
+	_ = listener.Close() // close it so Serve gets an error
 
 	original := listenFunc
 	test.Cleanup(func() { listenFunc = original })
