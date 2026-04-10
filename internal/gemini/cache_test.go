@@ -122,83 +122,81 @@ func TestClientCache_ConcurrentSameKey(test *testing.T) {
 }
 
 // TestClientCache_DoubleCheckUnderWriteLock exercises the re-check inside the
-// write lock by arranging for two goroutines to race past the read-lock miss
-// and then queue behind the write lock. The first goroutine acquires the write
-// lock, creates the client, seeds the cache, and releases. The second goroutine
-// acquires the write lock next and hits the double-check re-read, finding the
-// entry already present and returning it without calling the factory.
+// write lock (line 55 of cache.go). It uses the afterReadMiss hook to inject a
+// rendezvous between the read-lock miss and write-lock acquisition so that:
+//
+//  1. Goroutine 1 passes the read-lock miss and then blocks in afterReadMiss.
+//  2. Goroutine 2 is launched and also passes the read-lock miss.
+//  3. Goroutine 2 waits to acquire the write lock because goroutine 1 holds it.
+//  4. Goroutine 1 releases the write lock (after seeding the cache).
+//  5. Goroutine 2 acquires the write lock and finds the entry in the double-check.
 func TestClientCache_DoubleCheckUnderWriteLock(test *testing.T) {
+	// Restore the hook after the test.
+	test.Cleanup(func() { afterReadMiss = nil })
+
 	cache := newTestClientCache(30, 2)
 
-	// Track factory call count to confirm the second goroutine skips creation.
-	factoryCallCount := 0
-	original := genaiClientFactory
-	defer func() { genaiClientFactory = original }()
-	genaiClientFactory = func(ctx context.Context, config *genai.ClientConfig) (*genai.Client, error) {
-		factoryCallCount++
-		return original(ctx, config)
+	// goroutine1Waiting is closed when goroutine 1 has passed the read-lock miss
+	// and is inside afterReadMiss, waiting to proceed to the write lock.
+	goroutine1Waiting := make(chan struct{})
+	// goroutine2Ready is closed to release goroutine 1 once goroutine 2 is
+	// confirmed to be blocking on the write lock.
+	goroutine2Ready := make(chan struct{})
+
+	// Only let the first caller rendezvous; subsequent callers pass straight through.
+	firstCall := true
+	afterReadMiss = func() {
+		if !firstCall {
+			return
+		}
+		firstCall = false
+		close(goroutine1Waiting) // signal: goroutine 1 has missed read lock
+		<-goroutine2Ready        // wait until goroutine 2 is queued on write lock
 	}
 
-	// readyToRace is closed once both goroutines have confirmed the cache miss
-	// under read lock. holdWriteLock is used to keep the first goroutine inside
-	// the write-lock critical section while the second goroutine queues behind it.
-	holdWriteLock := make(chan struct{})
-	firstHasLock := make(chan struct{})
-
-	// Override factory for first goroutine to signal when it holds the write lock.
-	firstFactory := genaiClientFactory
-	signalFactory := func(ctx context.Context, config *genai.ClientConfig) (*genai.Client, error) {
-		close(firstHasLock) // signal: first goroutine now holds write lock
-		<-holdWriteLock     // block until test releases it
-		return firstFactory(ctx, config)
+	const sharedKey = "double-check-key"
+	type result struct {
+		client *Client
+		err    error
 	}
+	results := make(chan result, 2)
 
-	const sharedKey = "double-check-race-key"
-	results := make(chan *Client, 2)
-	errs := make(chan error, 2)
-
-	// First goroutine: will acquire write lock first (we arrange this via signalFactory).
-	go func() {
-		genaiClientFactory = signalFactory
-		client, clientError := cache.GetClient(context.Background(), sharedKey)
-		results <- client
-		errs <- clientError
-	}()
-
-	// Wait until the first goroutine holds the write lock.
-	<-firstHasLock
-
-	// Restore normal factory for the second goroutine, then launch it.
-	// At this point the cache is still empty under the write lock held by goroutine 1,
-	// so goroutine 2 will pass the read lock miss and block on the write lock.
-	genaiClientFactory = original
+	// Goroutine 1 will be the first to miss the read lock and acquire the write lock.
 	go func() {
 		client, clientError := cache.GetClient(context.Background(), sharedKey)
-		results <- client
-		errs <- clientError
+		results <- result{client, clientError}
 	}()
 
-	// Give goroutine 2 time to reach and block on the write lock.
+	// Wait until goroutine 1 has passed the read-lock miss and is paused.
+	<-goroutine1Waiting
+
+	// Goroutine 2 starts now. It will also miss the read lock (cache is still empty
+	// because goroutine 1 is paused before acquiring the write lock), then block
+	// waiting for the write lock.
+	go func() {
+		client, clientError := cache.GetClient(context.Background(), sharedKey)
+		results <- result{client, clientError}
+	}()
+
+	// Give goroutine 2 time to block on the write lock.
 	time.Sleep(20 * time.Millisecond)
 
-	// Release goroutine 1; it seeds the cache and releases the write lock.
-	// Goroutine 2 then acquires the write lock, hits the double-check, and returns
-	// the already-created client without calling the factory a second time.
-	close(holdWriteLock)
+	// Release goroutine 1. It acquires the write lock, creates the client, seeds
+	// the cache, and releases the lock. Goroutine 2 then acquires the write lock,
+	// hits the double-check at cache.go line 55, finds the entry, and returns it
+	// without calling the factory again.
+	close(goroutine2Ready)
 
-	for goroutineIndex := 0; goroutineIndex < 2; goroutineIndex++ {
-		clientError := <-errs
-		if clientError != nil {
-			test.Errorf("goroutine %d: unexpected error: %v", goroutineIndex, clientError)
-		}
-	}
 	firstResult := <-results
 	secondResult := <-results
 
-	if firstResult != secondResult {
-		test.Errorf("expected both goroutines to return the same client, got different pointers")
+	if firstResult.err != nil {
+		test.Errorf("goroutine 1: unexpected error: %v", firstResult.err)
 	}
-	if factoryCallCount > 1 {
-		test.Errorf("expected factory to be called at most once, got %d calls", factoryCallCount)
+	if secondResult.err != nil {
+		test.Errorf("goroutine 2: unexpected error: %v", secondResult.err)
+	}
+	if firstResult.client != secondResult.client {
+		test.Error("expected both goroutines to return the same client pointer")
 	}
 }

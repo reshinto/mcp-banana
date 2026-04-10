@@ -30,6 +30,11 @@ func NewClientCache(defaultClient *Client, timeoutSecs int, proConcurrency int) 
 	}
 }
 
+// afterReadMiss is called in tests between the read-lock miss and write-lock
+// acquisition to create a deterministic window for exercising the double-check
+// path. It is nil in production and has no runtime cost.
+var afterReadMiss func()
+
 // GetClient returns a Gemini client for the given API key.
 // If apiKey is empty, the default client is returned.
 // If a client for apiKey is already cached, it is returned without creating a new one.
@@ -45,6 +50,12 @@ func (cache *ClientCache) GetClient(ctx context.Context, apiKey string) (*Client
 	cache.mutex.RUnlock()
 	if found {
 		return existing, nil
+	}
+
+	// afterReadMiss is nil in production; tests set it to inject a rendezvous
+	// point that makes the double-check path deterministically reachable.
+	if afterReadMiss != nil {
+		afterReadMiss()
 	}
 
 	// Slow path: create and cache a new client under write lock.
