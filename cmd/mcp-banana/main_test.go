@@ -333,7 +333,7 @@ func TestRun_HTTPModeStartsAndShutdown(test *testing.T) {
 		test.Fatalf("failed to create listener: %v", listenError)
 	}
 	listenerAddress := listener.Addr().String()
-	listener.Close() // close so we can re-listen in the test
+	_ = listener.Close() // close so we can re-listen in the test
 
 	original := listenFunc
 	test.Cleanup(func() { listenFunc = original })
@@ -356,7 +356,7 @@ func TestRun_HTTPModeStartsAndShutdown(test *testing.T) {
 	for attempt := 0; attempt < 50; attempt++ {
 		resp, fetchError := httpClient.Get(healthURL)
 		if fetchError == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				break
 			}
@@ -390,7 +390,7 @@ func TestRun_HTTPNoAuthWarning(test *testing.T) {
 		test.Fatalf("failed to create listener: %v", listenError)
 	}
 	listenerAddress := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	original := listenFunc
 	test.Cleanup(func() { listenFunc = original })
@@ -413,7 +413,7 @@ func TestRun_HTTPNoAuthWarning(test *testing.T) {
 	for attempt := 0; attempt < 50; attempt++ {
 		resp, fetchError := httpClient.Get(healthURL)
 		if fetchError == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -449,7 +449,7 @@ func TestRun_HTTPShutdownError(test *testing.T) {
 		test.Fatalf("failed to create listener: %v", listenError)
 	}
 	listenerAddress := listener.Addr().String()
-	listener.Close()
+	_ = listener.Close()
 
 	original := listenFunc
 	test.Cleanup(func() { listenFunc = original })
@@ -472,7 +472,7 @@ func TestRun_HTTPShutdownError(test *testing.T) {
 	for attempt := 0; attempt < 50; attempt++ {
 		resp, fetchError := httpClient.Get(healthURL)
 		if fetchError == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -483,7 +483,7 @@ func TestRun_HTTPShutdownError(test *testing.T) {
 	if dialError != nil {
 		test.Fatalf("failed to dial server: %v", dialError)
 	}
-	defer holdConn.Close()
+	defer func() { _ = holdConn.Close() }()
 
 	// Send partial HTTP request to keep the connection alive during shutdown.
 	_, _ = holdConn.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n"))

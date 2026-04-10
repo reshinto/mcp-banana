@@ -47,11 +47,6 @@ var stdioServe = func(mcpServer *server.MCPServer) error {
 	return server.ServeStdio(mcpServer)
 }
 
-// httpListenAndServe starts an HTTP server. Overridden in tests.
-var httpListenAndServe = func(httpServer *http.Server) error {
-	return httpServer.ListenAndServe()
-}
-
 // run contains all the main logic and returns an exit code.
 // It is extracted from main() to enable comprehensive testing.
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -67,7 +62,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if *versionFlag {
-		fmt.Fprintf(stdout, "mcp-banana %s\n", version)
+		_, _ = fmt.Fprintf(stdout, "mcp-banana %s\n", version)
 		return 0
 	}
 
@@ -77,12 +72,12 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
-		fmt.Fprintf(stderr, "failed to load config: %s\n", loadError)
+		_, _ = fmt.Fprintf(stderr, "failed to load config: %s\n", loadError)
 		return 1
 	}
 
 	if registryError := registryValidator(); registryError != nil {
-		fmt.Fprintf(stderr, "registry validation failed: %s\n", registryError)
+		_, _ = fmt.Fprintf(stderr, "registry validation failed: %s\n", registryError)
 		return 1
 	}
 
@@ -106,7 +101,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		serverConfig.ProConcurrency,
 	)
 	if clientError != nil {
-		fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
+		_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
 		return 1
 	}
 
@@ -116,13 +111,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	case "stdio":
 		logger.Info("starting mcp-banana in stdio mode", "version", version)
 		if stdioError := stdioServe(mcpServer); stdioError != nil {
-			fmt.Fprintf(stderr, "stdio server error: %s\n", stdioError)
+			_, _ = fmt.Fprintf(stderr, "stdio server error: %s\n", stdioError)
 			return 1
 		}
 	case "http":
 		return runHTTPServer(mcpServer, serverConfig, logger, *address)
 	default:
-		fmt.Fprintf(stderr, "unknown transport: %s (must be stdio or http)\n", *transport)
+		_, _ = fmt.Fprintf(stderr, "unknown transport: %s (must be stdio or http)\n", *transport)
 		return 1
 	}
 
@@ -148,12 +143,12 @@ func runHealthCheck(address string, stderr io.Writer) int {
 	httpClient := &http.Client{Timeout: 5 * time.Second}
 	healthResponse, fetchError := httpClient.Get(fmt.Sprintf("http://%s/healthz", address))
 	if fetchError != nil {
-		fmt.Fprintf(stderr, "health check failed: %s\n", fetchError)
+		_, _ = fmt.Fprintf(stderr, "health check failed: %s\n", fetchError)
 		return 1
 	}
 	defer func() { _ = healthResponse.Body.Close() }()
 	if healthResponse.StatusCode != http.StatusOK {
-		fmt.Fprintf(stderr, "health check returned status %d\n", healthResponse.StatusCode)
+		_, _ = fmt.Fprintf(stderr, "health check returned status %d\n", healthResponse.StatusCode)
 		return 1
 	}
 	return 0
@@ -178,7 +173,7 @@ func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, log
 
 	listener, listenError := listenFunc("tcp", address)
 	if listenError != nil {
-		fmt.Fprintf(os.Stderr, "failed to listen on %s: %s\n", address, listenError)
+		_, _ = fmt.Fprintf(os.Stderr, "failed to listen on %s: %s\n", address, listenError)
 		return 1
 	}
 
@@ -197,7 +192,7 @@ func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, log
 
 	logger.Info("starting mcp-banana in HTTP mode", "addr", address, "version", version)
 	if serveError := httpServer.Serve(listener); serveError != nil && serveError != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "HTTP server error: %s\n", serveError)
+		_, _ = fmt.Fprintf(os.Stderr, "HTTP server error: %s\n", serveError)
 		return 1
 	}
 	logger.Info("server shutdown complete")
