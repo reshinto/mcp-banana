@@ -43,7 +43,7 @@ func defaultTestConfig() *config.Config {
 // buildHandler wires the full stack (MCP server + middleware) using the provided config.
 func buildHandler(cfg *config.Config) http.Handler {
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, cfg.MaxImageBytes)
-	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default())
+	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil)
 }
 
 // --- Middleware: auth ---
@@ -256,7 +256,7 @@ func TestMiddlewarePanicRecovery(test *testing.T) {
 		panic("deliberate test panic")
 	})
 
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), panicHandler)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), panicHandler, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
@@ -348,7 +348,7 @@ func TestMiddlewareConcurrencyTimeout(test *testing.T) {
 	blockingHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-blockChan
 	})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), blockingHandler)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), blockingHandler, nil)
 
 	// First request takes the only concurrency slot and blocks.
 	go func() {
@@ -395,7 +395,7 @@ func TestMiddlewareNonMaxBytesReadError(test *testing.T) {
 	}
 
 	noopHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), noopHandler)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), noopHandler, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", errorReader{})
 	rec := httptest.NewRecorder()
