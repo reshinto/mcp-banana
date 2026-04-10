@@ -76,7 +76,7 @@
 
 - [ ] **Step A: Stash current changes** -- the docs/specs/plans files are uncommitted and must be preserved:
 ```bash
-cd /Users/springfield/dev/mcp-banana
+cd /Users/computername/dev/mcp-banana
 git stash push -u -m "pre-mcp-server-plan"
 ```
 - [ ] **Step B: Create feature branch from main:**
@@ -100,9 +100,9 @@ git commit -m "docs: add implementation plan and design spec"
 
 Then verify:
 - [ ] On branch `feat/mcp-server`
-- [ ] Working directory is `/Users/springfield/dev/mcp-banana`
+- [ ] Working directory is `/Users/computername/dev/mcp-banana`
 - [ ] Plan and spec files are committed
-- [ ] Note: local path is `/Users/springfield/dev/mcp-banana` but Go module path is `github.com/reshinto/mcp-banana` (matching the GitHub remote). This is intentional -- the local directory name does not need to match the module path.
+- [ ] Note: local path is `/Users/computername/dev/mcp-banana` but Go module path is `github.com/reshinto/mcp-banana` (matching the GitHub remote). This is intentional -- the local directory name does not need to match the module path.
 
 ---
 
