@@ -5,14 +5,18 @@ flowchart TD
     VERSION -->|No| HEALTH{--healthcheck?}
     HEALTH -->|Yes| HTTP_GET[GET /healthz with 5s timeout<br/>Exit 0 on 200, exit 1 otherwise]
     HEALTH -->|No| LOAD[config.Load<br/>Read all env vars, validate]
-    LOAD --> AUTH_CHECK{HTTP transport +<br/>no MCP_AUTH_TOKEN?}
-    AUTH_CHECK -->|Yes| FAIL_AUTH[Exit: token required for HTTP]
-    AUTH_CHECK -->|No| VALIDATE[gemini.ValidateRegistryAtStartup<br/>Check for sentinel model IDs]
+    LOAD --> VALIDATE[gemini.ValidateRegistryAtStartup<br/>Check for sentinel model IDs]
     VALIDATE --> SENTINEL{Sentinel IDs<br/>present?}
     SENTINEL -->|Yes| FAIL_SENTINEL[Exit: unverified model IDs]
     SENTINEL -->|No| SECRETS[security.RegisterSecret<br/>API key + auth token]
-    SECRETS --> CLIENT[gemini.NewClient<br/>SDK init + pro semaphore]
-    CLIENT --> MCP_SRV[server.NewMCPServer<br/>Register 4 tools]
-    MCP_SRV --> TRANSPORT{--transport?}
+    SECRETS --> LOGGER[Create structured logger]
+    LOGGER --> CLIENT[gemini.NewClient<br/>SDK init + pro semaphore<br/>optional if per-user keys only]
+    CLIENT --> CACHE[gemini.NewClientCache<br/>per-user client pool]
+    CACHE --> MCP_SRV[server.NewMCPServer<br/>Register 4 tools]
+    MCP_SRV --> OAUTH_BUILD[Build OAuth providers<br/>Google / GitHub]
+    OAUTH_BUILD --> OAUTH_STORE[Create OAuth store<br/>+ cleanup goroutine]
+    OAUTH_STORE --> TRANSPORT{--transport?}
     TRANSPORT -->|stdio| STDIO[server.ServeStdio<br/>Block until stdin closes]
-    TRANSPORT -->|http| HTTP_SRV[http.Server.ListenAndServe<br/>Graceful shutdown on SIGTERM/SIGINT]
+    TRANSPORT -->|http| TLS{TLS configured?}
+    TLS -->|Yes| HTTPS[http.Server.ListenAndServeTLS<br/>Graceful shutdown on SIGTERM/SIGINT]
+    TLS -->|No| HTTP_SRV[http.Server.ListenAndServe<br/>Graceful shutdown on SIGTERM/SIGINT]

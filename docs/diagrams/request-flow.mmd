@@ -1,30 +1,39 @@
 sequenceDiagram
-    participant CC as Claude Code
+    participant CL as Client
     participant MW as Middleware
     participant TH as Tool Handler
     participant SEC as Security
+    participant CACHE as ClientCache
     participant GEM as Gemini Client
     participant API as Gemini API
 
-    CC->>MW: POST /mcp (JSON-RPC)
+    CL->>MW: POST /mcp (JSON-RPC)
     MW->>MW: Panic recovery
-    MW->>MW: Bearer token auth
+    MW->>MW: Bearer token / OAuth auth
+    MW->>MW: X-Gemini-API-Key → context
     MW->>MW: Rate limit check
-    MW->>MW: Concurrency semaphore
+    MW->>MW: Concurrency semaphore (5s timeout)
     MW->>MW: Body size check (15MB)
-    MW->>TH: generate_image call
+    MW->>TH: generate_image / edit_image call
     TH->>SEC: ValidatePrompt(prompt)
     TH->>SEC: ValidateModelAlias(model)
     TH->>SEC: ValidateAspectRatio(ratio)
-    TH->>GEM: GenerateImage(ctx, alias, prompt, opts)
-    GEM->>GEM: LookupModel(alias) -> GeminiID
-    GEM->>GEM: Pro semaphore (if nano-banana-pro)
+    TH->>TH: Resolve Gemini client
+    alt X-Gemini-API-Key present in context
+        TH->>CACHE: GetOrCreate(userAPIKey)
+        CACHE-->>TH: per-user Gemini client
+    else use default client
+        TH->>GEM: default Gemini client
+    end
+    TH->>GEM: GenerateImage / EditImage(ctx, alias, prompt, opts)
+    GEM->>GEM: LookupModel(alias) → GeminiID
     GEM->>GEM: context.WithTimeout(120s)
     GEM->>API: GenerateContent(modelID, parts, config)
     API-->>GEM: Response with image data
-    GEM->>GEM: extractImage() -> ImageResult
+    GEM->>GEM: extractImage() → ImageResult
     GEM->>GEM: MapError() on failure (safe codes only)
     GEM-->>TH: ImageResult (alias in ModelUsed, NOT GeminiID)
+    TH->>SEC: SanitizeOutput(result)
     TH->>TH: json.Marshal(result)
     TH-->>MW: CallToolResult (Go error always nil)
-    MW-->>CC: JSON-RPC response
+    MW-->>CL: JSON-RPC response

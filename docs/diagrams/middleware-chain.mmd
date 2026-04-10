@@ -1,14 +1,15 @@
 flowchart TD
-    REQ([Incoming HTTP Request]) --> PANIC[Panic Recovery<br/>defer recover]
-    PANIC --> HEALTHZ{Path == /healthz?}
-    HEALTHZ -->|Yes| PASS[Pass through to handler<br/>Skip all middleware]
-    HEALTHZ -->|No| AUTH{Bearer token<br/>matches?}
+    REQ([Incoming HTTP Request]) --> PANIC[1. Panic Recovery<br/>defer recover]
+    PANIC --> HEALTHZ{2. Path == /healthz?}
+    HEALTHZ -->|Yes| PASS[Pass through to handler<br/>Skip remaining middleware]
+    HEALTHZ -->|No| AUTH{3. Bearer token or<br/>OAuth token valid?}
     AUTH -->|No| R401[401 unauthorized]
-    AUTH -->|Yes| RATE{Rate limit<br/>allows?}
+    AUTH -->|Yes| APIKEY[4. X-Gemini-API-Key extraction<br/>store in request context]
+    APIKEY --> RATE{5. Rate limit<br/>token bucket allows?}
     RATE -->|No| R429[429 rate_limited<br/>+ Retry-After header]
-    RATE -->|Yes| SEM{Concurrency slot<br/>available within 5s?}
+    RATE -->|Yes| SEM{6. Concurrency semaphore<br/>slot available within 5s?}
     SEM -->|No| R503[503 server_busy]
-    SEM -->|Yes| BODY[Pre-read body<br/>MaxBytesReader 15MB]
+    SEM -->|Yes| BODY[7. Body size limit<br/>MaxBytesReader 15MB]
     BODY --> BODYOK{Body read OK?}
     BODYOK -->|Size exceeded| R413[413 request_too_large]
     BODYOK -->|Other error| R400[400 bad_request]

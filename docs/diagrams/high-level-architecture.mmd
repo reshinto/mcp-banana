@@ -1,10 +1,13 @@
 graph TB
     CC[Claude Code] -->|stdio JSON-RPC| STDIO[Stdio Transport]
-    CC -->|HTTP + Bearer Token| HTTP[HTTP Transport]
+    CD[Claude Desktop] -->|HTTP/HTTPS + OAuth| HTTP[HTTP Transport]
 
     STDIO --> MCP[MCP Server<br/>mark3labs/mcp-go]
     HTTP --> MW[Middleware Chain]
     MW --> MCP
+
+    CD -->|OAuth flow| OAUTH[OAuth Provider<br/>Google / GitHub]
+    OAUTH -->|token exchange| HTTP
 
     MCP --> GEN[generate_image]
     MCP --> EDIT[edit_image]
@@ -13,12 +16,18 @@ graph TB
 
     GEN --> SEC[Security Layer<br/>validate + sanitize]
     EDIT --> SEC
+    LIST --> SEC
     REC --> POL[Policy Engine<br/>model recommendation]
 
-    SEC --> GEM[Gemini Client<br/>google.golang.org/genai]
+    SEC --> RESOLVE{Resolve<br/>Gemini client}
+    RESOLVE -->|default key| GCLIENT[Gemini Client<br/>google.golang.org/genai]
+    RESOLVE -->|per-user key| CACHE[ClientCache<br/>per-user clients]
 
-    GEM -->|API Key secret| API[Google Gemini API]
+    GCLIENT -->|API Key| API[Google Gemini API]
+    CACHE -->|X-Gemini-API-Key| API
 
     style SEC fill:#f9d,stroke:#333
     style MW fill:#bbf,stroke:#333
     style API fill:#bfb,stroke:#333
+    style OAUTH fill:#ddf,stroke:#333
+    style CACHE fill:#dfd,stroke:#333
