@@ -21,18 +21,110 @@
 | **Image generation failure** | `{"error":"rate_limited"}` (HTTP 429) | Token bucket exhausted (`MCP_RATE_LIMIT` requests per minute) | Wait for the bucket to refill, or increase `MCP_RATE_LIMIT` in `.env` |
 | **Docker: restart loop** | `docker compose ps` shows `Restarting` | Startup error (missing env var, bad config, sentinel IDs) | Run `docker compose logs mcp-banana` to see the specific error message |
 | **Docker: health check failing** | Container shows `unhealthy` | Server didn't start, or `/healthz` is unreachable | Run `docker compose logs mcp-banana`; confirm the binary started and is bound to `0.0.0.0:8847` |
-| **Docker: cert mount missing** | `tls: failed to find any PEM data` or TLS startup error | Certificate files not mounted into the container | Uncomment the `volumes` block in `docker-compose.yml` and map your cert directory |
+| **Docker: cert mount missing** | `tls: failed to find any PEM data` or TLS startup error | Certificate files not mounted into the container | Ensure `docker-compose.prod.yml` mounts the cert directory and `MCP_TLS_CERT_FILE`/`MCP_TLS_KEY_FILE` are set in `.env`. See [TLS certificate generation](#tls-certificate-generation) below |
+| **TLS cert directory not found** | `WARNING: TLS certificate directory not found at /etc/letsencrypt/live/<domain>` when running `run-docker-prod.sh` | TLS certificates have not been generated yet, or you are running the prod script on a local machine that doesn't have certs | If on the production server, generate certs with certbot (see [TLS certificate generation](#tls-certificate-generation) below). If on your local machine, this warning is expected — use `./scripts/run-docker-dev.sh` for local development instead |
 | **Claude Code: server not showing** | `banana` absent from `claude mcp list` | Server was not added, or was added with wrong scope | Re-run `claude mcp add-json` with the correct `--scope`; restart Claude Code |
 | **Claude Code: wrong config shown** | `claude mcp get banana` shows stdio instead of HTTP | Scope conflict: project-scoped `.mcp.json` shadows user-scoped config | Remove the conflicting entry: `claude mcp remove banana --scope project` |
 | **Claude Code: binary not found** | `no such file or directory` or `command not found` on stdio | `mcp-banana` binary not on PATH or wrong path in config | Use the absolute path in `command`, or copy the binary to `/usr/local/bin/` |
 | **OAuth: no providers on login page** | `/authorize` renders but shows no sign-in buttons | Both `CLIENT_ID` and `CLIENT_SECRET` are required per provider; at least one is missing | Set both vars for at least one provider in `.env` and restart the server |
 | **OAuth: callback error** | `invalid or expired state` after provider redirect | The provider session expired (10-minute window) or the state was tampered | Restart the sign-in flow from scratch in Claude Desktop |
-| **OAuth: Claude Desktop can't connect** | Timeout or TLS error in Claude Desktop | Server not reachable over HTTPS, or `OAUTH_BASE_URL` does not match the actual URL | Verify `curl https://mcp.terencekong.net:8847/healthz` succeeds; confirm `OAUTH_BASE_URL` matches exactly |
+| **OAuth: Claude Desktop can't connect** | Timeout or TLS error in Claude Desktop | Server not reachable over HTTPS, or `OAUTH_BASE_URL` does not match the actual URL | Verify `curl https://mcp.yourdomain.com:8847/healthz` succeeds; confirm `OAUTH_BASE_URL` matches exactly |
 | **OAuth: Apple callback fails locally** | Apple redirect fails or returns error | Apple Sign-In does not support `http://localhost` callbacks | Test Apple only on production with HTTPS. Use Google or GitHub for local OAuth testing |
 | **OAuth: Apple secret expired** | `invalid_client` from Apple after weeks/months | Apple uses JWT-based client secrets that expire (max 6 months) | Regenerate the JWT from your Apple private key and update `OAUTH_APPLE_CLIENT_SECRET` in `.env` |
 | **OAuth: 401 triggers OAuth flow** | Claude Code shows "authenticate banana MCP server" instead of calling tools | An `Authorization` header with an invalid/mismatched token causes 401, which Claude Code interprets as needing OAuth | Remove the `Authorization` header from your Claude Code MCP config if auth is disabled, or set the correct token |
 | **Per-user key: X-Gemini-API-Key not working** | Calls use the server key instead of the personal key | Header not included in Claude Code config | Add `"X-Gemini-API-Key": "<your-key>"` to the `headers` block in your `claude mcp add-json` command |
 | **Per-user key: key rejected by Gemini** | `generation_failed` with an auth error | The key in `X-Gemini-API-Key` is invalid or revoked | Test the key: `curl "https://generativelanguage.googleapis.com/v1beta/models?key=<your-key>"` |
+
+---
+
+## TLS Certificate Generation
+
+TLS certificates are required for production HTTPS. Without them, the server cannot serve HTTPS and Claude Desktop OAuth will not work. mcp-banana uses [Let's Encrypt](https://letsencrypt.org/) for free, auto-renewable certificates.
+
+### Prerequisites
+
+- A domain name (e.g., `mcp.yourdomain.com`) with a DNS A record pointing to your server
+- SSH access to the production server
+- `certbot` installed on the server
+
+### Step-by-step
+
+**1. Install certbot on your server:**
+
+```bash
+sudo apt-get update && sudo apt-get install -y certbot
+```
+
+**2. Run certbot with the DNS challenge:**
+
+This method does not require ports 80 or 443 to be free.
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns -d mcp.yourdomain.com
+```
+
+Replace `mcp.yourdomain.com` with your actual domain (the value of `MCP_DOMAIN` in `.env`).
+
+**3. Create the DNS TXT record:**
+
+Certbot will display something like:
+
+```
+Please deploy a DNS TXT record under the name:
+_acme-challenge.mcp.yourdomain.com
+with the following value:
+AbC123xYz...
+```
+
+Go to your domain registrar's DNS settings and add:
+
+| Type | Name | Value |
+|---|---|---|
+| TXT | `_acme-challenge.mcp` | `AbC123xYz...` (the value certbot shows) |
+
+Wait 1-2 minutes for DNS propagation, then press Enter in certbot.
+
+**4. Verify the certificates were created:**
+
+```bash
+sudo ls /etc/letsencrypt/live/mcp.yourdomain.com/
+```
+
+You should see:
+
+```
+cert.pem  chain.pem  fullchain.pem  privkey.pem  README
+```
+
+The two files used by mcp-banana are:
+- `fullchain.pem` — the TLS certificate (mapped to `MCP_TLS_CERT_FILE=/certs/fullchain.pem`)
+- `privkey.pem` — the private key (mapped to `MCP_TLS_KEY_FILE=/certs/privkey.pem`)
+
+**5. Verify the certificate is valid:**
+
+```bash
+sudo openssl x509 -in /etc/letsencrypt/live/mcp.yourdomain.com/fullchain.pem -noout -dates
+```
+
+This shows the `notBefore` and `notAfter` dates.
+
+### Certificate renewal
+
+Let's Encrypt certificates expire after 90 days. Renew before expiry:
+
+```bash
+sudo certbot renew --manual --preferred-challenges dns
+```
+
+After renewal, restart the container to pick up the new certs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml restart
+```
+
+### Running locally without TLS
+
+If you see the `WARNING: TLS certificate directory not found` message on your local machine, this is expected. TLS certificates only exist on the production server. For local development, use `./scripts/run-docker-dev.sh` instead — it runs without TLS on `127.0.0.1:8847`.
 
 ---
 
