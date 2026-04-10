@@ -183,57 +183,92 @@ Open a new Claude Code session and ask Claude to generate an image.
 
 ## Mode 3 — Docker Prod (HTTP, public IP, TLS, OAuth)
 
-Run the server on a public-facing host with TLS termination and optional OAuth 2.1 for Claude Desktop integration. The reference domain in this guide is `mcp.terencekong.net` — substitute your own domain throughout.
+Run the server on a public-facing host with HTTPS and optional OAuth 2.1 for Claude Desktop. This guide uses `mcp.terencekong.net` as the domain and a DigitalOcean droplet as the server — adapt to your setup.
 
 ### Step 1 — Provision a server
 
-Create an Ubuntu 22.04 LTS server (1 GB RAM minimum) with SSH key authentication. Note the server's public IP address.
+Create an Ubuntu 22.04+ server (1 GB RAM minimum) with SSH key authentication. Note the server's **public IP address**.
 
-Install Docker:
+**1.1 SSH into the server:**
 
 ```bash
 ssh root@<server-ip>
-apt-get update && apt-get install -y docker.io docker-compose-plugin
+```
+
+**1.2 Install Docker:**
+
+```bash
+apt-get update
+apt-get install -y docker.io docker-compose-plugin certbot
 systemctl enable docker && systemctl start docker
 ```
 
-Create a deploy user:
+**1.3 Create a deploy user:**
 
 ```bash
 adduser deploy
 usermod -aG docker deploy
-# Append your SSH public key to /home/deploy/.ssh/authorized_keys
+su - deploy
+mkdir -p ~/.ssh
+# Paste your SSH public key into ~/.ssh/authorized_keys
+```
+
+**1.4 Open port 8847 in the firewall:**
+
+```bash
+# If using ufw (Ubuntu default):
+sudo ufw allow 8847/tcp
+
+# If using DigitalOcean cloud firewall:
+# Add an inbound rule: TCP port 8847 from any source
 ```
 
 ### Step 2 — Configure DNS
 
-Create an A record pointing your subdomain to the server's IP:
+In your domain registrar's DNS settings, create an A record:
 
-| Type | Name | Value |
-|---|---|---|
-| A | `mcp` (or your subdomain) | `<server-ip>` |
+| Type | Name | Value | TTL |
+|---|---|---|---|
+| A | `mcp` | `<server-public-ip>` | 300 |
 
-This makes `mcp.terencekong.net` resolve to your server. Verify propagation before proceeding:
+This makes `mcp.terencekong.net` resolve to your server.
+
+**Wait for propagation, then verify:**
 
 ```bash
-dig mcp.terencekong.net
-# Should return your server's IP
+dig mcp.terencekong.net +short
+# Should print your server's IP
 ```
+
+If `dig` is not installed: `apt-get install -y dnsutils`
 
 ### Step 3 — Obtain a TLS certificate
 
-Use `certbot` with the DNS challenge. This method works without running a web server first:
+Run `certbot` on the server. The DNS challenge method works without needing port 80/443:
 
 ```bash
-certbot certonly --manual --preferred-challenges dns -d mcp.terencekong.net
+sudo certbot certonly --manual --preferred-challenges dns -d mcp.terencekong.net
 ```
 
-`certbot` prompts you to add a `_acme-challenge` TXT record in your DNS provider. Add the record, wait for propagation, then press Enter. Certificates are written to `/etc/letsencrypt/live/mcp.terencekong.net/`.
+Certbot will ask you to create a DNS TXT record:
 
-Renew certificates before they expire (Let's Encrypt certificates are valid for 90 days):
+```
+_acme-challenge.mcp.terencekong.net → <value-certbot-shows>
+```
+
+Add that TXT record in your domain registrar, wait 1-2 minutes for propagation, then press Enter in certbot.
+
+**Verify the certificate was created:**
 
 ```bash
-certbot renew --manual --preferred-challenges dns
+sudo ls /etc/letsencrypt/live/mcp.terencekong.net/
+# Should show: cert.pem  chain.pem  fullchain.pem  privkey.pem  README
+```
+
+**Set up auto-renewal** (Let's Encrypt certificates expire after 90 days):
+
+```bash
+sudo certbot renew --manual --preferred-challenges dns --dry-run
 ```
 
 ### Step 4 — Clone and configure
@@ -245,44 +280,77 @@ cd /opt/mcp-banana
 cp .env.example .env
 ```
 
-Edit `.env` with the minimum required values for production:
+**Edit `.env` — here is the complete production configuration:**
 
-```
-GEMINI_API_KEY=AIza...
-MCP_AUTH_TOKEN=<your-token>
-
+```bash
+# === Required for HTTPS ===
 MCP_TLS_CERT_FILE=/certs/fullchain.pem
 MCP_TLS_KEY_FILE=/certs/privkey.pem
+
+# === Authentication (choose one or both) ===
+# Option A: Bearer token (for Claude Code CLI)
+# Generate with: openssl rand -hex 32
+MCP_AUTH_TOKEN=<paste-your-generated-token>
+
+# Option B: Leave both empty to disable auth
+#   (clients must provide their own Gemini key via X-Gemini-API-Key header)
+# MCP_AUTH_TOKEN=
+# MCP_AUTH_TOKENS_FILE=
+
+# === Gemini API Key (optional) ===
+# If set, this is the default key for all clients.
+# If empty, clients MUST send their own key via X-Gemini-API-Key header.
+GEMINI_API_KEY=
+
+# === Server tuning (defaults are fine for most setups) ===
+MCP_LOG_LEVEL=info
+MCP_RATE_LIMIT=30
+MCP_GLOBAL_CONCURRENCY=8
+MCP_PRO_CONCURRENCY=3
+MCP_MAX_IMAGE_BYTES=4194304
+MCP_REQUEST_TIMEOUT_SECS=120
 ```
 
-The `docker-compose.prod.yml` overlay mounts `/etc/letsencrypt/live/mcp.terencekong.net` into the container at `/certs`. The paths above match that mount.
+**How `docker-compose.prod.yml` works:**
+
+The production overlay file adds two things on top of the base `docker-compose.yml`:
+1. Changes the port binding from `127.0.0.1:8847` (localhost only) to `0.0.0.0:8847` (all interfaces)
+2. Mounts `/etc/letsencrypt/live/mcp.terencekong.net` into the container at `/certs` (read-only)
+
+The `MCP_TLS_CERT_FILE=/certs/fullchain.pem` and `MCP_TLS_KEY_FILE=/certs/privkey.pem` paths in `.env` reference files inside this mount.
 
 ### Step 5 — Configure OAuth (optional)
 
-OAuth enables Claude Desktop to authenticate users through Google, GitHub, or Apple. Skip this step if you only need bearer token auth.
+Skip this step if you only need bearer token auth or per-user API keys via `X-Gemini-API-Key` header.
 
-**Register your app with each provider.**
+OAuth enables Claude Desktop GUI to authenticate users through Google, GitHub, or Apple. Each provider requires registering an OAuth app and setting the callback URL.
 
-Google — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
+**5.1 Register your app with each provider.**
 
-Create an OAuth 2.0 Client ID. Set the authorized redirect URI to:
-`https://mcp.terencekong.net:8847/callback`
+**Google** — [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials)
 
-GitHub — [github.com/settings/developers](https://github.com/settings/developers)
+1. Create a new OAuth 2.0 Client ID (type: Web application)
+2. Add authorized redirect URI: `https://mcp.terencekong.net:8847/callback`
+3. Copy the client ID and client secret
 
-Create a new OAuth App. Set the authorization callback URL to:
-`https://mcp.terencekong.net:8847/callback`
+**GitHub** — [github.com/settings/developers](https://github.com/settings/developers)
 
-Apple — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
+1. Create a new OAuth App
+2. Set authorization callback URL: `https://mcp.terencekong.net:8847/callback`
+3. Copy the client ID and client secret
 
-Register a Services ID. Set the return URL to:
-`https://mcp.terencekong.net:8847/callback`
+**Apple** — [developer.apple.com/account/resources/identifiers](https://developer.apple.com/account/resources/identifiers)
 
-> **Apple Sign-In limitations:** Apple requires an Apple Developer account ($99/year), HTTPS with a registered domain (no `http://localhost`), and a JWT-based client secret generated from a private key — not a static string. Apple Sign-In can only be tested on a production server with TLS. See the [Local OAuth Testing](#local-oauth-testing) section for details.
+1. Create a Services ID
+2. Set return URL: `https://mcp.terencekong.net:8847/callback`
+3. Create a private key (Keys section) with Sign In with Apple enabled
+4. Generate a JWT client secret from the private key
 
-**Add credentials to `.env`:**
+> **Apple Sign-In limitations:** Requires an Apple Developer account ($99/year), HTTPS with a registered domain (no localhost), and a JWT-based client secret that expires every 6 months. See [Local OAuth Testing](#local-oauth-testing) for details.
 
-```
+**5.2 Add credentials to `.env`:**
+
+```bash
 OAUTH_BASE_URL=https://mcp.terencekong.net:8847
 
 OAUTH_GOOGLE_CLIENT_ID=<client-id>
@@ -290,9 +358,13 @@ OAUTH_GOOGLE_CLIENT_SECRET=<client-secret>
 
 OAUTH_GITHUB_CLIENT_ID=<client-id>
 OAUTH_GITHUB_CLIENT_SECRET=<client-secret>
+
+# Apple (optional — see limitations above)
+# OAUTH_APPLE_CLIENT_ID=<services-id>
+# OAUTH_APPLE_CLIENT_SECRET=<jwt-secret>
 ```
 
-Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the OAuth login page. You do not need to configure all three.
+Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the login page. You do not need to configure all three.
 
 ### Step 6 — Start the server
 
@@ -300,30 +372,93 @@ Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the OAuth
 ./scripts/run-docker-prod.sh
 ```
 
-The script merges `docker-compose.yml` with `docker-compose.prod.yml` (which overrides the port binding to `0.0.0.0:8847` and mounts the TLS certificate directory), then runs `docker compose up -d --build`.
+The script:
+1. Checks for `.env`
+2. Checks for TLS certificate directory
+3. Runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`
 
 ### Step 7 — Verify
+
+**Health check:**
 
 ```bash
 curl -k https://mcp.terencekong.net:8847/healthz
 ```
 
-Expected response:
+Expected: `{"status":"ok"}`
 
-```json
-{"status":"ok"}
+**OAuth metadata (if OAuth is configured):**
+
+```bash
+curl -k https://mcp.terencekong.net:8847/.well-known/oauth-authorization-server
 ```
+
+Expected: JSON with `issuer`, `authorization_endpoint`, `token_endpoint`, `registration_endpoint`.
+
+**Verify from your local machine:**
+
+```bash
+curl -k https://mcp.terencekong.net:8847/healthz
+```
+
+If this fails, check: DNS propagation, firewall (port 8847 open), TLS cert paths, container logs (`docker compose logs -f`).
 
 ### Step 8 — Connect Claude Code
 
+**With bearer token auth:**
+
 ```bash
-claude mcp add-json --scope user banana \
-  '{"type":"http","url":"https://mcp.terencekong.net:8847/mcp","headers":{"Authorization":"Bearer <your-token>"}}'
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.terencekong.net:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>"
+  }
+}'
 ```
 
-### Step 9 — Connect Claude Desktop
+**With per-user Gemini API key (no server-side GEMINI_API_KEY needed):**
 
-Open Claude Desktop, go to **Customize > Connectors**, and add a new connector with URL `https://mcp.terencekong.net:8847/mcp`. If OAuth is configured, Claude Desktop uses the OAuth flow to authenticate.
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.terencekong.net:8847/mcp",
+  "headers": {
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
+  }
+}'
+```
+
+**With both auth and per-user key:**
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.terencekong.net:8847/mcp",
+  "headers": {
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
+  }
+}'
+```
+
+Verify: `claude mcp list` should show `banana: ✓ Connected`.
+
+### Step 9 — Connect Claude Desktop (requires OAuth)
+
+1. Open Claude Desktop
+2. Go to **Customize > Connectors**
+3. Add URL: `https://mcp.terencekong.net:8847/mcp`
+4. Claude Desktop will discover the OAuth metadata, register a client, and redirect you to sign in
+5. After signing in with your chosen provider, Claude Desktop receives an access token and can call tools
+
+### Step 10 — Test
+
+Ask Claude to generate an image:
+
+```
+Generate a photo of a sunset over the ocean
+```
 
 ### Updating production
 
@@ -350,7 +485,7 @@ All variables are loaded from `.env` at startup. The server exits immediately wi
 
 | Variable | Required | Default | Type | Description |
 |---|---|---|---|---|
-| `GEMINI_API_KEY` | Yes | — | string | Google Gemini API key. Starts with `AIza`. Registered as a secret — redacted from all logs and error output. |
+| `GEMINI_API_KEY` | No | — | string | Google Gemini API key. Starts with `AIza`. Registered as a secret. If not set, clients must send their own key via `X-Gemini-API-Key` header. |
 | `MCP_AUTH_TOKEN` | No | — | string | Single bearer token for HTTP authentication. Every HTTP request must include `Authorization: Bearer <token>`. Generate with `openssl rand -hex 32`. Not used in stdio mode. |
 | `MCP_AUTH_TOKENS_FILE` | No | — | path | Path to a file containing bearer tokens, one per line. Lines starting with `#` and empty lines are ignored. Hot-reloaded on every request — add or remove tokens without restarting. If both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` are set, a request matching either is accepted. |
 | `MCP_LOG_LEVEL` | No | `info` | enum | Log verbosity. One of: `debug`, `info`, `warn`, `error`. Logs are JSON-formatted and written to stderr. |
