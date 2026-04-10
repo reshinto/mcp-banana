@@ -2,8 +2,10 @@ package oauth
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -122,4 +124,242 @@ func buildProviderAuthURL(provider ProviderConfig, baseURL string, state string)
 	}
 
 	return fmt.Sprintf("%s?%s", provider.AuthURL, params.Encode())
+}
+
+// exchangeProviderCode is the package-level function used to exchange an upstream provider
+// authorization code for a provider access token. It is a variable so tests can replace it
+// with a mock without making real HTTP calls.
+var exchangeProviderCode = func(provider ProviderConfig, code string, callbackURL string) error {
+	formData := url.Values{}
+	formData.Set("grant_type", "authorization_code")
+	formData.Set("code", code)
+	formData.Set("redirect_uri", callbackURL)
+	formData.Set("client_id", provider.ClientID)
+	formData.Set("client_secret", provider.ClientSecret)
+
+	resp, postError := http.PostForm(provider.TokenURL, formData)
+	if postError != nil {
+		return fmt.Errorf("provider token request failed: %w", postError)
+	}
+	defer resp.Body.Close()        //nolint:errcheck
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("provider returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// NewCallbackHandler returns an http.Handler for the OAuth provider callback endpoint.
+// It handles GET callbacks (Google, GitHub) and POST callbacks (Apple), validates the
+// state parameter, exchanges the provider code for an MCP authorization code, and
+// redirects the client back to the registered redirect URI.
+func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var code, state string
+
+		if request.Method == http.MethodPost {
+			if parseError := request.ParseForm(); parseError != nil {
+				writeJSONError(writer, "invalid_request", http.StatusBadRequest)
+				return
+			}
+			code = request.PostForm.Get("code")
+			state = request.PostForm.Get("state")
+		} else {
+			queryParams := request.URL.Query()
+			code = queryParams.Get("code")
+			state = queryParams.Get("state")
+		}
+
+		session := store.GetProviderSession(state)
+		if session == nil {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+				"error":             "invalid_request",
+				"error_description": "invalid or expired state",
+			})
+			return
+		}
+
+		var matchedProvider *ProviderConfig
+		for providerIndex := range providers {
+			if providers[providerIndex].Name == session.Provider {
+				matchedProvider = &providers[providerIndex]
+				break
+			}
+		}
+		if matchedProvider == nil {
+			writeJSONError(writer, "server_error", http.StatusInternalServerError)
+			return
+		}
+
+		callbackURL := baseURL + "/callback"
+		if exchangeError := exchangeProviderCode(*matchedProvider, code, callbackURL); exchangeError != nil {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+				"error":             "server_error",
+				"error_description": "provider token exchange failed",
+			})
+			return
+		}
+
+		mcpCode, generateError := GenerateRandomToken(32)
+		if generateError != nil {
+			writeJSONError(writer, "server_error", http.StatusInternalServerError)
+			return
+		}
+
+		store.StoreAuthCode(&AuthCode{
+			Code:          mcpCode,
+			ClientID:      session.ClientID,
+			RedirectURI:   session.RedirectURI,
+			CodeChallenge: session.CodeChallenge,
+			ExpiresAt:     time.Now().Add(10 * time.Minute),
+		})
+
+		redirectTarget, parseError := url.Parse(session.RedirectURI)
+		if parseError != nil {
+			writeJSONError(writer, "server_error", http.StatusInternalServerError)
+			return
+		}
+		redirectQuery := redirectTarget.Query()
+		redirectQuery.Set("code", mcpCode)
+		redirectQuery.Set("state", session.OriginalState)
+		redirectTarget.RawQuery = redirectQuery.Encode()
+
+		http.Redirect(writer, request, redirectTarget.String(), http.StatusFound)
+	})
+}
+
+// NewTokenHandler returns an http.Handler for the /token endpoint.
+// It supports the authorization_code and refresh_token grant types as defined by OAuth 2.1.
+func NewTokenHandler(store *Store) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if parseError := request.ParseForm(); parseError != nil {
+			writeJSONError(writer, "invalid_request", http.StatusBadRequest)
+			return
+		}
+
+		grantType := request.PostForm.Get("grant_type")
+
+		switch grantType {
+		case "authorization_code":
+			handleAuthorizationCodeGrant(writer, request, store)
+		case "refresh_token":
+			handleRefreshTokenGrant(writer, request, store)
+		default:
+			writeJSONError(writer, "unsupported_grant_type", http.StatusBadRequest)
+		}
+	})
+}
+
+// handleAuthorizationCodeGrant processes the authorization_code grant type,
+// verifying the code, client, redirect URI, and PKCE challenge before issuing tokens.
+func handleAuthorizationCodeGrant(writer http.ResponseWriter, request *http.Request, store *Store) {
+	code := request.PostForm.Get("code")
+	clientID := request.PostForm.Get("client_id")
+	redirectURI := request.PostForm.Get("redirect_uri")
+	codeVerifier := request.PostForm.Get("code_verifier")
+
+	authCode := store.ConsumeAuthCode(code)
+	if authCode == nil {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+			"error":             "invalid_grant",
+			"error_description": "invalid or expired code",
+		})
+		return
+	}
+
+	if authCode.ClientID != clientID || authCode.RedirectURI != redirectURI {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+			"error":             "invalid_grant",
+			"error_description": "client_id or redirect_uri mismatch",
+		})
+		return
+	}
+
+	if !VerifyCodeChallenge(authCode.CodeChallenge, codeVerifier, "S256") {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+			"error":             "invalid_grant",
+			"error_description": "PKCE verification failed",
+		})
+		return
+	}
+
+	issueTokenResponse(writer, store, clientID)
+}
+
+// handleRefreshTokenGrant processes the refresh_token grant type,
+// consuming the existing refresh token and issuing a new token pair.
+func handleRefreshTokenGrant(writer http.ResponseWriter, request *http.Request, store *Store) {
+	refreshToken := request.PostForm.Get("refresh_token")
+	clientID := request.PostForm.Get("client_id")
+
+	refreshData := store.ConsumeRefreshToken(refreshToken)
+	if refreshData == nil {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+			"error":             "invalid_grant",
+			"error_description": "invalid or expired refresh token",
+		})
+		return
+	}
+
+	if refreshData.ClientID != clientID {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+			"error":             "invalid_grant",
+			"error_description": "client_id mismatch",
+		})
+		return
+	}
+
+	issueTokenResponse(writer, store, clientID)
+}
+
+// issueTokenResponse generates a new access/refresh token pair, persists them,
+// and writes the token response JSON to the client.
+func issueTokenResponse(writer http.ResponseWriter, store *Store, clientID string) {
+	accessToken, accessError := GenerateRandomToken(32)
+	if accessError != nil {
+		writeJSONError(writer, "server_error", http.StatusInternalServerError)
+		return
+	}
+
+	newRefreshToken, refreshError := GenerateRandomToken(32)
+	if refreshError != nil {
+		writeJSONError(writer, "server_error", http.StatusInternalServerError)
+		return
+	}
+
+	store.StoreAccessToken(&TokenData{
+		Token:     accessToken,
+		ClientID:  clientID,
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	store.StoreRefreshToken(&RefreshData{
+		Token:     newRefreshToken,
+		ClientID:  clientID,
+		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+	})
+
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	json.NewEncoder(writer).Encode(map[string]interface{}{ //nolint:errcheck
+		"access_token":  accessToken,
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"refresh_token": newRefreshToken,
+	})
 }
