@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"google.golang.org/genai"
+
 	"github.com/reshinto/mcp-banana/internal/gemini"
 )
 
@@ -380,6 +382,142 @@ func TestEditImageHandler_InvalidImage(test *testing.T) {
 	textContent := extractTextContent(test, result)
 	if !strings.Contains(textContent, "invalid_image") {
 		test.Errorf("expected 'invalid_image' in error, got: %q", textContent)
+	}
+}
+
+// newTestClientCache creates a ClientCache suitable for use in tools tests.
+// The default client is initialised with a fake API key; genai.NewClient is lazy
+// and does not validate the key at construction time.
+func newTestClientCache(test *testing.T) *gemini.ClientCache {
+	test.Helper()
+	defaultClient, clientError := gemini.NewClient(context.Background(), "default-fake-key", 30, 2)
+	if clientError != nil {
+		test.Fatalf("failed to create default test client: %v", clientError)
+	}
+	return gemini.NewClientCache(defaultClient, 30, 2)
+}
+
+// --- generate_image per-request API key tests ---
+
+// TestGenerateImageHandler_PerRequestKey_Success verifies that when clientCache is non-nil
+// and the context contains a per-request API key, the resolved client is used.
+// The test passes an invalid prompt so validation short-circuits before any network call.
+func TestGenerateImageHandler_PerRequestKey_Success(test *testing.T) {
+	cache := newTestClientCache(test)
+	svc := &mockGeminiService{generateResult: stubImageResult()}
+	handler := NewGenerateImageHandler(svc, cache, 10*1024*1024)
+
+	requestContext := gemini.WithAPIKey(context.Background(), "per-request-api-key")
+	req := makeRequest(map[string]any{"prompt": ""}) // empty prompt triggers validation error
+	result, err := handler(requestContext, req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	// Validation fails after the resolved client is set, confirming the cache path was taken.
+	if !result.IsError {
+		test.Fatal("expected error result from validation after cache resolution")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_prompt") {
+		test.Errorf("expected invalid_prompt validation error, got: %q", textContent)
+	}
+}
+
+// TestGenerateImageHandler_PerRequestKey_CacheError verifies that when GetClient returns an
+// error the handler returns a safe error result without exposing internal details.
+func TestGenerateImageHandler_PerRequestKey_CacheError(test *testing.T) {
+	cache := newTestClientCache(test)
+	restore := gemini.OverrideClientFactory(func(_ context.Context, _ *genai.ClientConfig) (*genai.Client, error) {
+		return nil, errors.New("simulated factory failure")
+	})
+	defer restore()
+
+	svc := &mockGeminiService{generateResult: stubImageResult()}
+	handler := NewGenerateImageHandler(svc, cache, 10*1024*1024)
+
+	requestContext := gemini.WithAPIKey(context.Background(), "failing-api-key")
+	req := makeRequest(map[string]any{"prompt": "a sunny beach"})
+	result, err := handler(requestContext, req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result when cache returns error")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "failed to initialize client for provided API key") {
+		test.Errorf("expected safe cache error message, got: %q", textContent)
+	}
+	if strings.Contains(textContent, "simulated factory failure") {
+		test.Errorf("SECURITY: raw factory error must not appear in response, got: %q", textContent)
+	}
+}
+
+// --- edit_image per-request API key tests ---
+
+// TestEditImageHandler_PerRequestKey_Success verifies that when clientCache is non-nil
+// and the context contains a per-request API key, the resolved client is used.
+// The test passes empty instructions so validation short-circuits before any network call.
+func TestEditImageHandler_PerRequestKey_Success(test *testing.T) {
+	cache := newTestClientCache(test)
+	svc := &mockGeminiService{editResult: stubImageResult()}
+	handler := NewEditImageHandler(svc, cache, 10*1024*1024)
+
+	requestContext := gemini.WithAPIKey(context.Background(), "per-request-api-key")
+	req := makeRequest(map[string]any{
+		"instructions": "", // empty instructions triggers validation error
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(requestContext, req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	// Validation fails after the resolved client is set, confirming the cache path was taken.
+	if !result.IsError {
+		test.Fatal("expected error result from validation after cache resolution")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "invalid_prompt") {
+		test.Errorf("expected invalid_prompt validation error, got: %q", textContent)
+	}
+}
+
+// TestEditImageHandler_PerRequestKey_CacheError verifies that when GetClient returns an
+// error the handler returns a safe error result without exposing internal details.
+func TestEditImageHandler_PerRequestKey_CacheError(test *testing.T) {
+	cache := newTestClientCache(test)
+	restore := gemini.OverrideClientFactory(func(_ context.Context, _ *genai.ClientConfig) (*genai.Client, error) {
+		return nil, errors.New("simulated factory failure")
+	})
+	defer restore()
+
+	svc := &mockGeminiService{editResult: stubImageResult()}
+	handler := NewEditImageHandler(svc, cache, 10*1024*1024)
+
+	requestContext := gemini.WithAPIKey(context.Background(), "failing-api-key")
+	req := makeRequest(map[string]any{
+		"instructions": "make it brighter",
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(requestContext, req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result when cache returns error")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "failed to initialize client for provided API key") {
+		test.Errorf("expected safe cache error message, got: %q", textContent)
+	}
+	if strings.Contains(textContent, "simulated factory failure") {
+		test.Errorf("SECURITY: raw factory error must not appear in response, got: %q", textContent)
 	}
 }
 

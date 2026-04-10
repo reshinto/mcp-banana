@@ -33,6 +33,16 @@ var genaiClientFactory = func(ctx context.Context, config *genai.ClientConfig) (
 	return genai.NewClient(ctx, config)
 }
 
+// OverrideClientFactory replaces genaiClientFactory with the given function and returns a
+// restore function that resets it to the original. Intended for use in tests outside this
+// package that need to force client creation failures (e.g. to test cache error paths).
+// Call the returned function via defer to restore the original factory.
+func OverrideClientFactory(factory func(context.Context, *genai.ClientConfig) (*genai.Client, error)) func() {
+	original := genaiClientFactory
+	genaiClientFactory = factory
+	return func() { genaiClientFactory = original }
+}
+
 // NewClient creates a new Gemini API client with the given configuration.
 // proConcurrency sets the maximum number of concurrent requests for the pro model.
 func NewClient(startupContext context.Context, apiKey string, timeoutSecs int, proConcurrency int) (*Client, error) {
