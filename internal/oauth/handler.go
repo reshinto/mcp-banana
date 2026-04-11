@@ -166,7 +166,17 @@ var exchangeProviderCode = func(provider ProviderConfig, code string, callbackUR
 	formData.Set("client_id", provider.ClientID)
 	formData.Set("client_secret", provider.ClientSecret)
 
-	resp, postError := http.PostForm(provider.TokenURL, formData)
+	// GitHub requires Accept: application/json to return JSON instead of
+	// form-encoded response from the token endpoint.
+	tokenRequest, requestError := http.NewRequest("POST", provider.TokenURL, strings.NewReader(formData.Encode()))
+	if requestError != nil {
+		return "", fmt.Errorf("failed to create token request: %w", requestError)
+	}
+	tokenRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRequest.Header.Set("Accept", "application/json")
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, postError := httpClient.Do(tokenRequest)
 	if postError != nil {
 		return "", fmt.Errorf("provider token request failed: %w", postError)
 	}
@@ -179,10 +189,23 @@ var exchangeProviderCode = func(provider ProviderConfig, code string, callbackUR
 
 	var tokenResponse struct {
 		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		ErrorDesc   string `json:"error_description"`
 	}
 	if decodeError := json.NewDecoder(resp.Body).Decode(&tokenResponse); decodeError != nil {
 		return "", fmt.Errorf("failed to decode provider token response: %w", decodeError)
 	}
+
+	// GitHub returns 200 OK with an error field in the JSON body instead of
+	// using HTTP status codes for token exchange failures.
+	if tokenResponse.Error != "" {
+		return "", fmt.Errorf("provider token error: %s — %s", tokenResponse.Error, tokenResponse.ErrorDesc)
+	}
+
+	if tokenResponse.AccessToken == "" {
+		return "", errors.New("provider returned empty access token")
+	}
+
 	return tokenResponse.AccessToken, nil
 }
 
