@@ -193,3 +193,50 @@ func TestClientCache_DoubleCheckUnderWriteLock(test *testing.T) {
 		test.Error("expected both goroutines to return the same client pointer")
 	}
 }
+
+// mockGeminiService is a minimal test double for GeminiService used in cache tests.
+type mockGeminiService struct{}
+
+func (mock *mockGeminiService) GenerateImage(_ context.Context, _ string, _ string, _ GenerateOptions) (*ImageResult, error) {
+	return nil, nil
+}
+
+func (mock *mockGeminiService) EditImage(_ context.Context, _ string, _ []byte, _ string, _ string) (*ImageResult, error) {
+	return nil, nil
+}
+
+// TestClientCache_SetClientForKey verifies that SetClientForKey injects a client
+// into the cache so that subsequent GetClient calls for the same key return it.
+func TestClientCache_SetClientForKey(test *testing.T) {
+	cache := newTestClientCache(30, 2)
+
+	injected := &mockGeminiService{}
+	cache.SetClientForKey("injected-key", injected)
+
+	retrieved, clientError := cache.GetClient(context.Background(), "injected-key")
+	if clientError != nil {
+		test.Fatalf("unexpected error: %v", clientError)
+	}
+	if retrieved != injected {
+		test.Error("expected GetClient to return the injected mock client")
+	}
+}
+
+// TestClientCache_SetClientForKey_Overwrites verifies that SetClientForKey
+// replaces an existing cached client for the same key.
+func TestClientCache_SetClientForKey_Overwrites(test *testing.T) {
+	cache := newTestClientCache(30, 2)
+
+	first := &mockGeminiService{}
+	second := &mockGeminiService{}
+	cache.SetClientForKey("overwrite-key", first)
+	cache.SetClientForKey("overwrite-key", second)
+
+	retrieved, clientError := cache.GetClient(context.Background(), "overwrite-key")
+	if clientError != nil {
+		test.Fatalf("unexpected error: %v", clientError)
+	}
+	if retrieved != second {
+		test.Error("expected GetClient to return the second (overwritten) mock client")
+	}
+}
