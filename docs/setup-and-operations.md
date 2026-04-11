@@ -359,11 +359,17 @@ Only providers with both `CLIENT_ID` and `CLIENT_SECRET` set appear on the login
 ./scripts/run-docker-prod.sh
 ```
 
-The script:
+The script automatically:
 
-1. Checks for `.env`
-2. Checks for the TLS certificate directory
-3. Runs `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`
+1. Validates `.env` and `MCP_DOMAIN`
+2. Detects Docker Compose V1 or V2
+3. Auto-populates `OAUTH_BASE_URL`, `MCP_TLS_CERT_FILE`, `MCP_TLS_KEY_FILE` in `.env` from `MCP_DOMAIN`
+4. Auto-generates `MCP_AUTH_TOKEN` if empty
+5. Installs certbot and generates TLS certificates if missing (interactive DNS challenge)
+6. Fixes Let's Encrypt file permissions so the container can read the certs (the container runs as `nonroot`, but Let's Encrypt sets `privkey.pem` to root-only by default)
+7. Stops any existing container to free port 8847
+8. Builds and starts the Docker container with the production overlay
+9. Waits up to 30 seconds for the health check to pass before reporting success
 
 ### Step 7 — Verify
 
