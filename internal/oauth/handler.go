@@ -3,6 +3,7 @@ package oauth
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -129,7 +130,7 @@ func buildProviderAuthURL(provider ProviderConfig, baseURL string, state string)
 // exchangeProviderCode is the package-level function used to exchange an upstream provider
 // authorization code for a provider access token. It is a variable so tests can replace it
 // with a mock without making real HTTP calls.
-var exchangeProviderCode = func(provider ProviderConfig, code string, callbackURL string) error {
+var exchangeProviderCode = func(provider ProviderConfig, code string, callbackURL string) (string, error) {
 	formData := url.Values{}
 	formData.Set("grant_type", "authorization_code")
 	formData.Set("code", code)
@@ -139,15 +140,70 @@ var exchangeProviderCode = func(provider ProviderConfig, code string, callbackUR
 
 	resp, postError := http.PostForm(provider.TokenURL, formData)
 	if postError != nil {
-		return fmt.Errorf("provider token request failed: %w", postError)
+		return "", fmt.Errorf("provider token request failed: %w", postError)
 	}
-	defer resp.Body.Close()        //nolint:errcheck
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("provider returned status %d", resp.StatusCode)
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		return "", fmt.Errorf("provider returned status %d", resp.StatusCode)
 	}
-	return nil
+
+	var tokenResponse struct {
+		AccessToken string `json:"access_token"`
+	}
+	if decodeError := json.NewDecoder(resp.Body).Decode(&tokenResponse); decodeError != nil {
+		return "", fmt.Errorf("failed to decode provider token response: %w", decodeError)
+	}
+	return tokenResponse.AccessToken, nil
+}
+
+// providerIdentityFetcher is the package-level function used to fetch the user's identity
+// from the upstream provider's UserInfo endpoint. It is a variable so tests can replace it.
+var providerIdentityFetcher = func(provider ProviderConfig, providerAccessToken string) (string, error) {
+	if provider.UserInfoURL == "" {
+		return "", errors.New("provider does not have a userinfo endpoint")
+	}
+
+	userInfoRequest, requestError := http.NewRequest("GET", provider.UserInfoURL, nil)
+	if requestError != nil {
+		return "", fmt.Errorf("failed to create userinfo request: %w", requestError)
+	}
+	userInfoRequest.Header.Set("Authorization", "Bearer "+providerAccessToken)
+
+	if provider.Name == "github" {
+		userInfoRequest.Header.Set("Accept", "application/vnd.github+json")
+	}
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, fetchError := httpClient.Do(userInfoRequest)
+	if fetchError != nil {
+		return "", fmt.Errorf("userinfo request failed: %w", fetchError)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		return "", fmt.Errorf("userinfo endpoint returned status %d", resp.StatusCode)
+	}
+
+	var userInfo struct {
+		Email string `json:"email"`
+	}
+	if decodeError := json.NewDecoder(resp.Body).Decode(&userInfo); decodeError != nil {
+		return "", fmt.Errorf("failed to decode userinfo response: %w", decodeError)
+	}
+	if userInfo.Email == "" {
+		return "", errors.New("userinfo response did not contain an email")
+	}
+
+	return provider.Name + ":" + userInfo.Email, nil
+}
+
+// fetchProviderIdentity retrieves the authenticated user's identity from the upstream
+// provider using the provider access token obtained during code exchange.
+func fetchProviderIdentity(provider ProviderConfig, providerAccessToken string) (string, error) {
+	return providerIdentityFetcher(provider, providerAccessToken)
 }
 
 // NewCallbackHandler returns an http.Handler for the OAuth provider callback endpoint.
@@ -195,12 +251,24 @@ func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string
 		}
 
 		callbackURL := baseURL + "/callback"
-		if exchangeError := exchangeProviderCode(*matchedProvider, code, callbackURL); exchangeError != nil {
+		providerAccessToken, exchangeError := exchangeProviderCode(*matchedProvider, code, callbackURL)
+		if exchangeError != nil {
 			writer.Header().Set("Content-Type", "application/json")
 			writer.WriteHeader(http.StatusBadGateway)
 			json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
 				"error":             "server_error",
 				"error_description": "provider token exchange failed",
+			})
+			return
+		}
+
+		providerIdentity, identityError := fetchProviderIdentity(*matchedProvider, providerAccessToken)
+		if identityError != nil {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(writer).Encode(map[string]string{ //nolint:errcheck
+				"error":             "server_error",
+				"error_description": "failed to retrieve user identity from provider",
 			})
 			return
 		}
@@ -212,11 +280,12 @@ func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string
 		}
 
 		store.StoreAuthCode(&AuthCode{
-			Code:          mcpCode,
-			ClientID:      session.ClientID,
-			RedirectURI:   session.RedirectURI,
-			CodeChallenge: session.CodeChallenge,
-			ExpiresAt:     time.Now().Add(10 * time.Minute),
+			Code:             mcpCode,
+			ClientID:         session.ClientID,
+			RedirectURI:      session.RedirectURI,
+			CodeChallenge:    session.CodeChallenge,
+			ProviderIdentity: providerIdentity,
+			ExpiresAt:        time.Now().Add(10 * time.Minute),
 		})
 
 		redirectTarget, parseError := url.Parse(session.RedirectURI)
@@ -294,7 +363,7 @@ func handleAuthorizationCodeGrant(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 
-	issueTokenResponse(writer, store, clientID)
+	issueTokenResponse(writer, store, clientID, authCode.ProviderIdentity)
 }
 
 // handleRefreshTokenGrant processes the refresh_token grant type,
@@ -324,12 +393,12 @@ func handleRefreshTokenGrant(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 
-	issueTokenResponse(writer, store, clientID)
+	issueTokenResponse(writer, store, clientID, refreshData.ProviderIdentity)
 }
 
 // issueTokenResponse generates a new access/refresh token pair, persists them,
 // and writes the token response JSON to the client.
-func issueTokenResponse(writer http.ResponseWriter, store *Store, clientID string) {
+func issueTokenResponse(writer http.ResponseWriter, store *Store, clientID string, providerIdentity string) {
 	accessToken, accessError := GenerateRandomToken(32)
 	if accessError != nil {
 		writeJSONError(writer, "server_error", http.StatusInternalServerError)
@@ -343,15 +412,17 @@ func issueTokenResponse(writer http.ResponseWriter, store *Store, clientID strin
 	}
 
 	store.StoreAccessToken(&TokenData{
-		Token:     accessToken,
-		ClientID:  clientID,
-		ExpiresAt: time.Now().Add(time.Hour),
+		Token:            accessToken,
+		ClientID:         clientID,
+		ProviderIdentity: providerIdentity,
+		ExpiresAt:        time.Now().Add(time.Hour),
 	})
 
 	store.StoreRefreshToken(&RefreshData{
-		Token:     newRefreshToken,
-		ClientID:  clientID,
-		ExpiresAt: time.Now().Add(30 * 24 * time.Hour),
+		Token:            newRefreshToken,
+		ClientID:         clientID,
+		ProviderIdentity: providerIdentity,
+		ExpiresAt:        time.Now().Add(30 * 24 * time.Hour),
 	})
 
 	writer.Header().Set("Content-Type", "application/json")

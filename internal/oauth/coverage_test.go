@@ -132,10 +132,16 @@ func TestCallbackHandler_TokenGenerationFailure(test *testing.T) {
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
 
 	originalExchange := exchangeProviderCode
-	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) error {
-		return nil
+	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) (string, error) {
+		return "mock-access-token", nil
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
+
+	originalFetcher := providerIdentityFetcher
+	providerIdentityFetcher = func(_ ProviderConfig, _ string) (string, error) {
+		return "google:user@example.com", nil
+	}
+	defer func() { providerIdentityFetcher = originalFetcher }()
 
 	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
 
@@ -424,10 +430,16 @@ func TestCallbackHandler_MalformedRedirectURI(test *testing.T) {
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
 
 	originalExchange := exchangeProviderCode
-	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) error {
-		return nil
+	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) (string, error) {
+		return "mock-access-token", nil
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
+
+	originalFetcher := providerIdentityFetcher
+	providerIdentityFetcher = func(_ ProviderConfig, _ string) (string, error) {
+		return "google:user@example.com", nil
+	}
+	defer func() { providerIdentityFetcher = originalFetcher }()
 
 	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
 
@@ -521,7 +533,9 @@ func TestAuthorizeHandler_TemplateExecuteError(test *testing.T) {
 // beyond the mock-only paths used in other tests.
 func TestExchangeProviderCode_RealImpl(test *testing.T) {
 	testServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusOK)
+		json.NewEncoder(writer).Encode(map[string]string{"access_token": "test-token-abc"}) //nolint:errcheck
 	}))
 	defer testServer.Close()
 
@@ -533,9 +547,12 @@ func TestExchangeProviderCode_RealImpl(test *testing.T) {
 	}
 
 	// Call the real (non-mocked) function directly.
-	tokenError := exchangeProviderCode(provider, "auth-code-123", "https://mcp.example.com/callback")
+	accessToken, tokenError := exchangeProviderCode(provider, "auth-code-123", "https://mcp.example.com/callback")
 	if tokenError != nil {
 		test.Errorf("expected nil error from real exchangeProviderCode, got: %v", tokenError)
+	}
+	if accessToken != "test-token-abc" {
+		test.Errorf("expected access token 'test-token-abc', got '%s'", accessToken)
 	}
 }
 
@@ -554,7 +571,7 @@ func TestExchangeProviderCode_NonOKStatus(test *testing.T) {
 		TokenURL:     testServer.URL,
 	}
 
-	tokenError := exchangeProviderCode(provider, "bad-code", "https://mcp.example.com/callback")
+	_, tokenError := exchangeProviderCode(provider, "bad-code", "https://mcp.example.com/callback")
 	if tokenError == nil {
 		test.Error("expected error for non-200 provider response, got nil")
 	}
@@ -570,7 +587,7 @@ func TestExchangeProviderCode_PostFailure(test *testing.T) {
 		TokenURL:     "http://127.0.0.1:1", // port 1 is always refused
 	}
 
-	tokenError := exchangeProviderCode(provider, "any-code", "https://mcp.example.com/callback")
+	_, tokenError := exchangeProviderCode(provider, "any-code", "https://mcp.example.com/callback")
 	if tokenError == nil {
 		test.Error("expected error for unreachable provider, got nil")
 	}

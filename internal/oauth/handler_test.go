@@ -426,12 +426,18 @@ func TestCallbackHandler_Success(test *testing.T) {
 
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
 
-	// Replace the real HTTP call with a no-op mock.
+	// Replace the real HTTP calls with no-op mocks.
 	originalExchange := exchangeProviderCode
-	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) error {
-		return nil
+	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) (string, error) {
+		return "mock-access-token", nil
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
+
+	originalFetcher := providerIdentityFetcher
+	providerIdentityFetcher = func(_ ProviderConfig, _ string) (string, error) {
+		return "google:user@example.com", nil
+	}
+	defer func() { providerIdentityFetcher = originalFetcher }()
 
 	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
 
@@ -477,8 +483,8 @@ func TestCallbackHandler_ProviderExchangeFailure(test *testing.T) {
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
 
 	originalExchange := exchangeProviderCode
-	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) error {
-		return fmt.Errorf("upstream failure")
+	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) (string, error) {
+		return "", fmt.Errorf("upstream failure")
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
 
@@ -511,10 +517,16 @@ func TestCallbackHandler_PostMethod(test *testing.T) {
 	providers := []ProviderConfig{NewAppleProvider("aid", "asecret")}
 
 	originalExchange := exchangeProviderCode
-	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) error {
-		return nil
+	exchangeProviderCode = func(_ ProviderConfig, _ string, _ string) (string, error) {
+		return "mock-access-token", nil
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
+
+	originalFetcher := providerIdentityFetcher
+	providerIdentityFetcher = func(_ ProviderConfig, _ string) (string, error) {
+		return "apple:user@example.com", nil
+	}
+	defer func() { providerIdentityFetcher = originalFetcher }()
 
 	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
 
