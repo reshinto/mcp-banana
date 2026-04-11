@@ -26,17 +26,3 @@ func TestItoa_Zero(test *testing.T) {
 		test.Errorf("itoa(0) = %q, expected %q", result, "0")
 	}
 }
-
-func TestLoadTokensFromFile_NonExistentFile(test *testing.T) {
-	tokens := loadTokensFromFile("/nonexistent/path/tokens.txt")
-	if len(tokens) != 0 {
-		test.Errorf("expected empty tokens for non-existent file, got %d tokens", len(tokens))
-	}
-}
-
-func TestLoadTokensFromFile_EmptyPath(test *testing.T) {
-	tokens := loadTokensFromFile("")
-	if len(tokens) != 0 {
-		test.Errorf("expected empty tokens for empty path, got %d tokens", len(tokens))
-	}
-}

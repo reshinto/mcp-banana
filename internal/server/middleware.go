@@ -6,11 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/reshinto/mcp-banana/internal/config"
+	"github.com/reshinto/mcp-banana/internal/credentials"
 	"github.com/reshinto/mcp-banana/internal/gemini"
 	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/security"
@@ -32,12 +32,13 @@ type middleware struct {
 	limiter    *rate.Limiter
 	semaphore  chan struct{}
 	oauthStore *oauth.Store
+	credStore  *credentials.Store
 }
 
 // newMiddleware creates a middleware instance configured from cfg.
-// Pass a non-nil oauthStore to enable OAuth access token validation as a
-// fallback authentication path alongside the static bearer token check.
-func newMiddleware(cfg *config.Config, logger *slog.Logger, oauthStore *oauth.Store) *middleware {
+// Pass a non-nil oauthStore to enable OAuth access token validation.
+// Pass a non-nil credStore to enable credentials-file-based auth and Gemini key resolution.
+func newMiddleware(cfg *config.Config, logger *slog.Logger, oauthStore *oauth.Store, credStore *credentials.Store) *middleware {
 	tokensPerSecond := rate.Limit(float64(cfg.RateLimit) / 60.0)
 	limiter := rate.NewLimiter(tokensPerSecond, cfg.RateLimit)
 
@@ -52,6 +53,7 @@ func newMiddleware(cfg *config.Config, logger *slog.Logger, oauthStore *oauth.St
 		limiter:    limiter,
 		semaphore:  semaphore,
 		oauthStore: oauthStore,
+		credStore:  credStore,
 	}
 }
 
@@ -63,77 +65,81 @@ func writeJSONError(writer http.ResponseWriter, statusCode int, errorKey string)
 	writer.Write([]byte(`{"error":"` + errorKey + `"}`)) //nolint:errcheck
 }
 
-// loadTokensFromFile reads a tokens file and returns all non-empty, non-comment
-// lines as a set. The file is re-read on every call so tokens can be updated
-// without restarting the server.
-func loadTokensFromFile(filePath string) map[string]struct{} {
-	tokens := make(map[string]struct{})
-	if filePath == "" {
-		return tokens
-	}
-	data, readError := os.ReadFile(filePath)
-	if readError != nil {
-		return tokens
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		trimmed := strings.TrimSpace(line)
-		// Skip empty lines and comments
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		tokens[trimmed] = struct{}{}
-	}
-	return tokens
-}
-
-// authenticateRequest checks whether the incoming request has a valid bearer
-// token. Authentication is optional -- if no AuthToken and no AuthTokensFile
-// are configured, all requests pass through (SSH tunnel provides security).
+// authenticateRequest resolves the client's identity and Gemini API key.
+// Returns the Gemini API key and true if authenticated, or empty string and false if rejected.
 //
-// Token sources checked in order:
-//  1. AuthTokensFile (re-read on each request for hot-reload)
-//  2. AuthToken (single legacy token from env var)
+// Resolution priority:
+//  1. OAuth access token → resolve to provider:email → lookup in credentials file
+//  2. Bearer token → lookup directly in credentials file
+//  3. Unknown token + X-Gemini-API-Key header → self-register and proceed
+//  4. Unknown token + no header → reject
 //
-// If either source is configured, the request must provide a matching bearer token.
-func (mw *middleware) authenticateRequest(request *http.Request) bool {
-	hasFileTokens := mw.cfg.AuthTokensFile != ""
-	hasSingleToken := mw.cfg.AuthToken != ""
+// Auth is enforced if MCP_CREDENTIALS_FILE is set or OAuth is configured.
+func (mw *middleware) authenticateRequest(request *http.Request) (string, bool) {
+	hasCredentials := mw.credStore != nil
+	hasOAuth := mw.oauthStore != nil
 
-	// No auth configured -- rely on SSH tunnel for security
-	if !hasFileTokens && !hasSingleToken {
-		return true
+	// No auth configured — SSH tunnel mode
+	if !hasCredentials && !hasOAuth {
+		return "", true
 	}
 
-	// Extract bearer token from request
+	// Extract bearer token
 	authHeader := request.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, authHeaderPrefix) {
-		return false
+		return "", false
 	}
 	requestToken := authHeader[len(authHeaderPrefix):]
 	if requestToken == "" {
-		return false
+		return "", false
 	}
 
-	// Check tokens file first (hot-reloaded on each request)
-	if hasFileTokens {
-		fileTokens := loadTokensFromFile(mw.cfg.AuthTokensFile)
-		if _, exists := fileTokens[requestToken]; exists {
-			return true
+	// Priority 1: OAuth access token
+	if hasOAuth {
+		tokenData := mw.oauthStore.GetAccessTokenData(requestToken)
+		if tokenData != nil && tokenData.ProviderIdentity != "" {
+			if hasCredentials {
+				geminiKey := mw.credStore.Lookup(tokenData.ProviderIdentity)
+				if geminiKey != "" {
+					security.RegisterSecret(geminiKey)
+					return geminiKey, true
+				}
+			}
+			// OAuth valid but no Gemini key in credentials file
+			return "", false
 		}
 	}
 
-	// Fall back to single token from env var
-	if hasSingleToken && requestToken == mw.cfg.AuthToken {
-		return true
+	// Priority 2: Static bearer token in credentials file
+	if hasCredentials {
+		geminiKey := mw.credStore.Lookup(requestToken)
+		if geminiKey != "" {
+			security.RegisterSecret(geminiKey)
+			return geminiKey, true
+		}
 	}
 
-	// SECURITY: OAuth access tokens are validated last, after static bearer tokens.
-	// Only reached when static auth is configured but no static token matched.
-	if mw.oauthStore != nil && mw.oauthStore.ValidateAccessToken(requestToken) {
-		return true
+	// Priority 3: Self-registration via X-Gemini-API-Key header
+	geminiAPIKey := request.Header.Get("X-Gemini-API-Key")
+	geminiAPIKey = strings.TrimSpace(geminiAPIKey)
+	if geminiAPIKey != "" && hasCredentials {
+		// SECURITY: Validate the key before registering to prevent storing invalid keys
+		validateError := credentials.ValidateGeminiKey(request.Context(), geminiAPIKey)
+		if validateError != nil {
+			mw.logger.Warn("self-registration rejected: invalid Gemini API key")
+			return "", false
+		}
+		registerError := mw.credStore.Register(requestToken, geminiAPIKey)
+		if registerError != nil {
+			mw.logger.Error("failed to register credentials", "error", registerError)
+			return "", false
+		}
+		security.RegisterSecret(geminiAPIKey)
+		return geminiAPIKey, true
 	}
 
-	return false
+	// Priority 4: Reject
+	return "", false
 }
 
 // WrapHTTP wraps next with the full middleware chain:
@@ -153,11 +159,9 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 			}
 		}()
 
-		// 2. Bearer token auth (optional -- skipped when no tokens configured)
-		if !mw.authenticateRequest(request) {
-			// SECURITY: Include WWW-Authenticate header per RFC 9728 so OAuth
-			// clients (e.g. Claude Desktop) can discover the protected resource
-			// metadata and initiate the OAuth flow automatically.
+		// 2. Bearer token auth + Gemini key resolution
+		geminiKey, authenticated := mw.authenticateRequest(request)
+		if !authenticated {
 			if mw.cfg.OAuthBaseURL != "" {
 				writer.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+mw.cfg.OAuthBaseURL+`/.well-known/oauth-protected-resource"`)
 			}
@@ -165,14 +169,9 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 			return
 		}
 
-		// Extract per-request Gemini API key from header and store in context.
-		// SECURITY: Register the key with the sanitizer so it is redacted from all
-		// logs and error output, then attach it to the request context for downstream
-		// tool handlers to resolve the correct Gemini client.
-		geminiAPIKey := request.Header.Get("X-Gemini-API-Key")
-		if geminiAPIKey != "" {
-			security.RegisterSecret(geminiAPIKey)
-			request = request.WithContext(gemini.WithAPIKey(request.Context(), geminiAPIKey))
+		// Store resolved Gemini key in context for downstream tool handlers
+		if geminiKey != "" {
+			request = request.WithContext(gemini.WithAPIKey(request.Context(), geminiKey))
 		}
 
 		// 4. Rate limiting

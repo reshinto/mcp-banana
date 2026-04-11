@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/reshinto/mcp-banana/internal/config"
+	"github.com/reshinto/mcp-banana/internal/credentials"
 	"github.com/reshinto/mcp-banana/internal/gemini"
 	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/server"
@@ -31,26 +32,56 @@ func (mockGeminiService) EditImage(_ context.Context, _ string, _ []byte, _ stri
 	return &gemini.ImageResult{ImageBase64: "def", MIMEType: "image/jpeg", ModelUsed: "nano"}, nil
 }
 
-// defaultTestConfig returns a config suitable for most middleware tests.
-func defaultTestConfig() *config.Config {
+// noAuthConfig returns a config with no auth configured (SSH tunnel mode).
+func noAuthConfig() *config.Config {
 	return &config.Config{
-		AuthToken:         "test-secret",
 		RateLimit:         100,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
 	}
 }
 
-// buildHandler wires the full stack (MCP server + middleware) using the provided config.
-func buildHandler(cfg *config.Config) http.Handler {
+// createCredentialsFile creates a temporary credentials JSON file with the given
+// token-to-key mappings and returns the file path. The file is cleaned up when
+// the test finishes.
+func createCredentialsFile(test *testing.T, entries map[string]string) string {
+	test.Helper()
+	credFile, createError := os.CreateTemp("", "creds-*.json")
+	if createError != nil {
+		test.Fatalf("failed to create temp credentials file: %v", createError)
+	}
+	test.Cleanup(func() { _ = os.Remove(credFile.Name()) })
+
+	data, _ := json.Marshal(entries)
+	_, _ = credFile.Write(data)
+	_ = credFile.Close()
+	return credFile.Name()
+}
+
+// createCredStore creates a credentials.Store backed by a temporary file with
+// the given token-to-key mappings.
+func createCredStore(test *testing.T, entries map[string]string) *credentials.Store {
+	test.Helper()
+	filePath := createCredentialsFile(test, entries)
+	store, storeError := credentials.NewStore(filePath)
+	if storeError != nil {
+		test.Fatalf("failed to create credentials store: %v", storeError)
+	}
+	return store
+}
+
+// buildHandler wires the full stack (MCP server + middleware) using the provided
+// config and credentials store. Pass nil credStore for no-auth mode.
+func buildHandler(cfg *config.Config, credStore *credentials.Store) http.Handler {
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
-	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil)
+	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil, credStore)
 }
 
 // --- Middleware: auth ---
 
 func TestMiddlewareCorrectBearerToken(test *testing.T) {
-	handler := buildHandler(defaultTestConfig())
+	credStore := createCredStore(test, map[string]string{"test-secret": "AIzaTestKey"})
+	handler := buildHandler(noAuthConfig(), credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	req.Header.Set("Authorization", "Bearer test-secret")
@@ -64,7 +95,8 @@ func TestMiddlewareCorrectBearerToken(test *testing.T) {
 }
 
 func TestMiddlewareWrongBearerToken(test *testing.T) {
-	handler := buildHandler(defaultTestConfig())
+	credStore := createCredStore(test, map[string]string{"test-secret": "AIzaTestKey"})
+	handler := buildHandler(noAuthConfig(), credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	req.Header.Set("Authorization", "Bearer wrong-secret")
@@ -79,7 +111,8 @@ func TestMiddlewareWrongBearerToken(test *testing.T) {
 }
 
 func TestMiddlewareMissingBearerToken(test *testing.T) {
-	handler := buildHandler(defaultTestConfig())
+	credStore := createCredStore(test, map[string]string{"test-secret": "AIzaTestKey"})
+	handler := buildHandler(noAuthConfig(), credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	rec := httptest.NewRecorder()
@@ -93,15 +126,8 @@ func TestMiddlewareMissingBearerToken(test *testing.T) {
 }
 
 func TestMiddlewareNoAuthConfigured_PassesThrough(test *testing.T) {
-	// When no AuthToken and no AuthTokensFile are set, auth is skipped (SSH tunnel mode)
-	noAuthConfig := &config.Config{
-		AuthToken:         "",
-		AuthTokensFile:    "",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler := buildHandler(noAuthConfig)
+	// When no credStore and no oauthStore are set, auth is skipped (SSH tunnel mode)
+	handler := buildHandler(noAuthConfig(), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	rec := httptest.NewRecorder()
@@ -113,34 +139,21 @@ func TestMiddlewareNoAuthConfigured_PassesThrough(test *testing.T) {
 	}
 }
 
-func TestMiddlewareTokensFile(test *testing.T) {
-	// Create a temp tokens file with two tokens
-	tokensFile, createError := os.CreateTemp("", "tokens-*.txt")
-	if createError != nil {
-		test.Fatalf("failed to create temp file: %v", createError)
-	}
-	test.Cleanup(func() { _ = os.Remove(tokensFile.Name()) })
+func TestMiddlewareCredentialsFileLookup(test *testing.T) {
+	credStore := createCredStore(test, map[string]string{
+		"alice-token-abc": "AIzaAliceKey",
+		"bob-token-def":   "AIzaBobKey",
+	})
+	handler := buildHandler(noAuthConfig(), credStore)
 
-	_, _ = tokensFile.WriteString("# This is a comment\nalice-token-abc\nbob-token-def\n")
-	_ = tokensFile.Close()
-
-	fileAuthConfig := &config.Config{
-		AuthToken:         "",
-		AuthTokensFile:    tokensFile.Name(),
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler := buildHandler(fileAuthConfig)
-
-	// Valid token from file should pass
+	// Valid token from credentials file should pass
 	validReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	validReq.Header.Set("Authorization", "Bearer alice-token-abc")
 	validRec := httptest.NewRecorder()
 	handler.ServeHTTP(validRec, validReq)
 
 	if validRec.Code == http.StatusUnauthorized {
-		test.Fatalf("expected non-401 for valid file token, got 401")
+		test.Fatalf("expected non-401 for valid credentials file token, got 401")
 	}
 
 	// Invalid token should be rejected
@@ -150,50 +163,47 @@ func TestMiddlewareTokensFile(test *testing.T) {
 	handler.ServeHTTP(invalidRec, invalidReq)
 
 	if invalidRec.Code != http.StatusUnauthorized {
-		test.Fatalf("expected 401 for invalid token with file auth, got %d", invalidRec.Code)
+		test.Fatalf("expected 401 for invalid token with credentials file, got %d", invalidRec.Code)
 	}
 }
 
-func TestMiddlewareTokensFileHotReload(test *testing.T) {
-	// Create a temp tokens file with one token
-	tokensFile, createError := os.CreateTemp("", "tokens-*.txt")
-	if createError != nil {
-		test.Fatalf("failed to create temp file: %v", createError)
+// --- Middleware: Gemini key resolved into context ---
+
+func TestMiddlewareGeminiKeyResolvedFromCredentials(test *testing.T) {
+	credStore := createCredStore(test, map[string]string{"my-token": "AIzaResolvedKey"})
+
+	var capturedKey string
+	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		capturedKey = gemini.APIKeyFromContext(request.Context())
+	})
+	wrappedHandler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(), captureHandler, nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer my-token")
+	rec := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rec, req)
+
+	if capturedKey != "AIzaResolvedKey" {
+		test.Errorf("expected resolved key in context, got %q", capturedKey)
 	}
-	test.Cleanup(func() { _ = os.Remove(tokensFile.Name()) })
+}
 
-	_, _ = tokensFile.WriteString("initial-token\n")
-	_ = tokensFile.Close()
+func TestMiddlewareNoGeminiKeyInSSHTunnelMode(test *testing.T) {
+	// No credStore, no oauthStore — SSH tunnel mode, no key in context
+	var capturedKey string
+	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		capturedKey = gemini.APIKeyFromContext(request.Context())
+	})
+	wrappedHandler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(), captureHandler, nil, nil)
 
-	fileAuthConfig := &config.Config{
-		AuthTokensFile:    tokensFile.Name(),
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler := buildHandler(fileAuthConfig)
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	rec := httptest.NewRecorder()
 
-	// New token should fail initially
-	newReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
-	newReq.Header.Set("Authorization", "Bearer new-token")
-	newRec := httptest.NewRecorder()
-	handler.ServeHTTP(newRec, newReq)
+	wrappedHandler.ServeHTTP(rec, req)
 
-	if newRec.Code != http.StatusUnauthorized {
-		test.Fatalf("expected 401 for token not yet in file, got %d", newRec.Code)
-	}
-
-	// Update the file with the new token (hot reload, no restart)
-	_ = os.WriteFile(tokensFile.Name(), []byte("initial-token\nnew-token\n"), 0644)
-
-	// Now the new token should pass
-	retryReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
-	retryReq.Header.Set("Authorization", "Bearer new-token")
-	retryRec := httptest.NewRecorder()
-	handler.ServeHTTP(retryRec, retryReq)
-
-	if retryRec.Code == http.StatusUnauthorized {
-		test.Fatalf("expected non-401 after hot-reload, got 401")
+	if capturedKey != "" {
+		test.Errorf("expected empty key in context when no auth configured, got %q", capturedKey)
 	}
 }
 
@@ -201,12 +211,11 @@ func TestMiddlewareTokensFileHotReload(test *testing.T) {
 
 func TestMiddlewareRateLimitExhaustion(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         1, // burst of 1 token; second request is rejected
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
 	}
-	handler := buildHandler(cfg)
+	handler := buildHandler(cfg, nil)
 
 	// First non-healthz request consumes the single burst token.
 	firstReq := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
@@ -230,7 +239,8 @@ func TestMiddlewareRateLimitExhaustion(test *testing.T) {
 // --- Middleware: health bypass ---
 
 func TestHealthzBypassesAuthAndRateLimit(test *testing.T) {
-	handler := buildHandler(defaultTestConfig())
+	credStore := createCredStore(test, map[string]string{"test-secret": "AIzaTestKey"})
+	handler := buildHandler(noAuthConfig(), credStore)
 
 	// No Authorization header — should still succeed for /healthz.
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -247,7 +257,6 @@ func TestHealthzBypassesAuthAndRateLimit(test *testing.T) {
 
 func TestMiddlewarePanicRecovery(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         1000,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
@@ -257,7 +266,7 @@ func TestMiddlewarePanicRecovery(test *testing.T) {
 		panic("deliberate test panic")
 	})
 
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), panicHandler, nil)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), panicHandler, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
 	rec := httptest.NewRecorder()
@@ -272,13 +281,7 @@ func TestMiddlewarePanicRecovery(test *testing.T) {
 // --- Integration: tools/list via /mcp ---
 
 func TestIntegrationToolsList(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler := buildHandler(cfg)
+	handler := buildHandler(noAuthConfig(), nil)
 
 	body := jsonRPCBody("tools/list")
 	req := httptest.NewRequest(http.MethodPost, "/mcp", body)
@@ -296,13 +299,7 @@ func TestIntegrationToolsList(test *testing.T) {
 // --- Integration: oversized body ---
 
 func TestOversizedBodyRejected(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "",
-		RateLimit:         1000,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler := buildHandler(cfg)
+	handler := buildHandler(noAuthConfig(), nil)
 
 	oversizedBody := bytes.Repeat([]byte("x"), 16*1024*1024) // 16 MB > 15 MB limit
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(oversizedBody))
@@ -320,7 +317,8 @@ func TestOversizedBodyRejected(test *testing.T) {
 // --- Middleware: empty bearer token ---
 
 func TestMiddlewareEmptyBearerToken(test *testing.T) {
-	handler := buildHandler(defaultTestConfig())
+	credStore := createCredStore(test, map[string]string{"test-secret": "AIzaTestKey"})
+	handler := buildHandler(noAuthConfig(), credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	req.Header.Set("Authorization", "Bearer ")
@@ -338,7 +336,6 @@ func TestMiddlewareEmptyBearerToken(test *testing.T) {
 
 func TestMiddlewareConcurrencyTimeout(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         1000,
 		GlobalConcurrency: 1, // single slot
 		MaxImageBytes:     4 * 1024 * 1024,
@@ -349,7 +346,7 @@ func TestMiddlewareConcurrencyTimeout(test *testing.T) {
 	blockingHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-blockChan
 	})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), blockingHandler, nil)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), blockingHandler, nil, nil)
 
 	// First request takes the only concurrency slot and blocks.
 	go func() {
@@ -389,14 +386,13 @@ func (errorReader) Close() error {
 
 func TestMiddlewareNonMaxBytesReadError(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         1000,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
 	}
 
 	noopHandler := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), noopHandler, nil)
+	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), noopHandler, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", errorReader{})
 	rec := httptest.NewRecorder()
@@ -412,12 +408,11 @@ func TestMiddlewareNonMaxBytesReadError(test *testing.T) {
 
 func TestMiddlewareRetryAfterClampedToOne(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         120, // 120 per minute = 2/sec, so 1/limit = 0.5 → retryAfterSecs = 0 → clamped to 1
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
 	}
-	handler := buildHandler(cfg)
+	handler := buildHandler(cfg, nil)
 
 	// Exhaust the burst (120 requests) then trigger rate limiting
 	for requestIndex := 0; requestIndex < 120; requestIndex++ {
@@ -440,31 +435,31 @@ func TestMiddlewareRetryAfterClampedToOne(test *testing.T) {
 	}
 }
 
-// --- Middleware: OAuth access token validation ---
+// --- Middleware: OAuth access token with credentials ---
 
-// buildHandlerWithOAuth creates a handler with an oauth.Store that has a valid access token pre-loaded.
-func buildHandlerWithOAuth(cfg *config.Config, validToken string) (http.Handler, *oauth.Store) {
-	store := oauth.NewStore()
-	store.StoreAccessToken(&oauth.TokenData{
-		Token:     validToken,
-		ClientID:  "test-client",
-		ExpiresAt: time.Now().Add(1 * time.Hour),
-	})
+// buildHandlerWithOAuthAndCreds creates a handler with an oauth.Store and credentials store.
+func buildHandlerWithOAuthAndCreds(cfg *config.Config, oauthStore *oauth.Store, credStore *credentials.Store) http.Handler {
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
-	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
-	return handler, store
+	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), oauthStore, nil, credStore)
 }
 
-// TestMiddlewareOAuthTokenAccepted verifies that a valid OAuth access token is accepted
-// when static auth is also configured but the OAuth token matches.
-func TestMiddlewareOAuthTokenAccepted(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "static-secret",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	handler, _ := buildHandlerWithOAuth(cfg, "valid-oauth-token-xyz")
+// TestMiddlewareOAuthTokenWithCredentials verifies that a valid OAuth access token
+// with a provider identity is resolved to a Gemini key via the credentials file.
+func TestMiddlewareOAuthTokenWithCredentials(test *testing.T) {
+	oauthStore := oauth.NewStore()
+	oauthStore.StoreAccessToken(&oauth.TokenData{
+		Token:            "valid-oauth-token-xyz",
+		ClientID:         "test-client",
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(1 * time.Hour),
+	})
+
+	credStore := createCredStore(test, map[string]string{
+		"google:user@example.com": "AIzaOAuthUserKey",
+	})
+
+	cfg := noAuthConfig()
+	handler := buildHandlerWithOAuthAndCreds(cfg, oauthStore, credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	req.Header.Set("Authorization", "Bearer valid-oauth-token-xyz")
@@ -480,20 +475,20 @@ func TestMiddlewareOAuthTokenAccepted(test *testing.T) {
 // TestMiddlewareOAuthTokenRejectedWhenExpired verifies that an expired OAuth access token
 // is rejected even when an oauth.Store is configured.
 func TestMiddlewareOAuthTokenRejectedWhenExpired(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "static-secret",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-	store := oauth.NewStore()
-	store.StoreAccessToken(&oauth.TokenData{
-		Token:     "expired-oauth-token",
-		ClientID:  "test-client",
-		ExpiresAt: time.Now().Add(-1 * time.Hour), // already expired
+	oauthStore := oauth.NewStore()
+	oauthStore.StoreAccessToken(&oauth.TokenData{
+		Token:            "expired-oauth-token",
+		ClientID:         "test-client",
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(-1 * time.Hour), // already expired
 	})
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
-	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
+
+	credStore := createCredStore(test, map[string]string{
+		"google:user@example.com": "AIzaOAuthUserKey",
+	})
+
+	cfg := noAuthConfig()
+	handler := buildHandlerWithOAuthAndCreds(cfg, oauthStore, credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
 	req.Header.Set("Authorization", "Bearer expired-oauth-token")
@@ -506,69 +501,12 @@ func TestMiddlewareOAuthTokenRejectedWhenExpired(test *testing.T) {
 	}
 }
 
-// --- Middleware: per-request Gemini API key ---
-
-// TestMiddlewareGeminiAPIKeyPassedToContext verifies that a valid X-Gemini-API-Key header
-// is extracted and attached to the request context, enabling per-user client selection.
-func TestMiddlewareGeminiAPIKeyPassedToContext(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-
-	// Use a handler that captures the context to verify the key was injected.
-	var capturedKey string
-	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		capturedKey = gemini.APIKeyFromContext(request.Context())
-	})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), captureHandler, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	req.Header.Set("X-Gemini-API-Key", "per-user-api-key-abc")
-	rec := httptest.NewRecorder()
-
-	wrappedHandler.ServeHTTP(rec, req)
-
-	if capturedKey != "per-user-api-key-abc" {
-		test.Errorf("expected per-user key in context, got %q", capturedKey)
-	}
-}
-
-// TestMiddlewareNoGeminiAPIKey verifies that omitting X-Gemini-API-Key results in
-// an empty string from context (the default client is used).
-func TestMiddlewareNoGeminiAPIKey(test *testing.T) {
-	cfg := &config.Config{
-		AuthToken:         "",
-		RateLimit:         100,
-		GlobalConcurrency: 8,
-		MaxImageBytes:     4 * 1024 * 1024,
-	}
-
-	var capturedKey string
-	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
-		capturedKey = gemini.APIKeyFromContext(request.Context())
-	})
-	wrappedHandler := server.WrapWithMiddleware(cfg, slog.Default(), captureHandler, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	rec := httptest.NewRecorder()
-
-	wrappedHandler.ServeHTTP(rec, req)
-
-	if capturedKey != "" {
-		test.Errorf("expected empty key in context when header absent, got %q", capturedKey)
-	}
-}
-
 // --- NewHTTPHandler: OAuth routes ---
 
 // TestNewHTTPHandler_OAuthRoutesMounted verifies that when oauthStore and OAuthBaseURL
 // are configured, the OAuth discovery endpoint is registered and reachable.
 func TestNewHTTPHandler_OAuthRoutesMounted(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         100,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
@@ -581,7 +519,7 @@ func TestNewHTTPHandler_OAuthRoutesMounted(test *testing.T) {
 	}
 
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
-	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	rec := httptest.NewRecorder()
@@ -601,7 +539,6 @@ func TestNewHTTPHandler_OAuthRoutesMounted(test *testing.T) {
 // the OAuth discovery endpoint is NOT registered.
 func TestNewHTTPHandler_OAuthRoutesNotMounted(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         100,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
@@ -610,7 +547,7 @@ func TestNewHTTPHandler_OAuthRoutesNotMounted(test *testing.T) {
 
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
 	// Passing nil store — OAuth routes should NOT be mounted.
-	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	rec := httptest.NewRecorder()
@@ -628,7 +565,6 @@ func TestNewHTTPHandler_OAuthRoutesNotMounted(test *testing.T) {
 // oauthStore is non-nil, OAuth routes are not mounted if OAuthBaseURL is empty.
 func TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL(test *testing.T) {
 	cfg := &config.Config{
-		AuthToken:         "",
 		RateLimit:         100,
 		GlobalConcurrency: 8,
 		MaxImageBytes:     4 * 1024 * 1024,
@@ -637,7 +573,7 @@ func TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL(test *testing.T) {
 
 	store := oauth.NewStore()
 	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
-	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	rec := httptest.NewRecorder()

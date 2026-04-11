@@ -183,7 +183,7 @@ func TestRun_HealthCheckConnectionRefused(test *testing.T) {
 
 // --- Config loading ---
 
-func TestRun_NoAPIKey_StartsWithWarning(test *testing.T) {
+func TestRun_NoAPIKey_StartsSuccessfully(test *testing.T) {
 	withCleanSecrets(test)
 	test.Setenv("GEMINI_API_KEY", "")
 
@@ -199,9 +199,6 @@ func TestRun_NoAPIKey_StartsWithWarning(test *testing.T) {
 	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
 	if exitCode != 0 {
 		test.Fatalf("expected exit code 0 (server starts without API key), got %d; stderr: %s", exitCode, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "no GEMINI_API_KEY configured") {
-		test.Errorf("expected warning about missing API key, got: %q", stderr.String())
 	}
 }
 
@@ -230,23 +227,6 @@ func TestRun_RegistryValidationFails(test *testing.T) {
 }
 
 // --- Client factory error ---
-
-func TestRun_ClientFactoryError(test *testing.T) {
-	withCleanSecrets(test)
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
-	withVerifiedRegistry(test)
-	withMockClientFactory(test, errors.New("simulated client failure"))
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{}, &stdout, &stderr)
-	if exitCode != 1 {
-		test.Fatalf("expected exit code 1, got %d", exitCode)
-	}
-	if !strings.Contains(stderr.String(), "failed to create Gemini client") {
-		test.Errorf("expected client error, got: %q", stderr.String())
-	}
-}
 
 // --- Unknown transport ---
 
@@ -284,26 +264,6 @@ func TestResolveLogLevel(test *testing.T) {
 				test.Errorf("resolveLogLevel(%q) = %v, expected %v", testCase.input, result, testCase.expected)
 			}
 		})
-	}
-}
-
-// --- Auth token registration ---
-
-func TestRun_AuthTokenRegistered(test *testing.T) {
-	setupServerEnv(test)
-	test.Setenv("MCP_AUTH_TOKEN", "my-test-auth-token")
-	withMockStdio(test, nil)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
-	if exitCode != 0 {
-		test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
-	}
-
-	sanitized := security.SanitizeString("token is my-test-auth-token")
-	if strings.Contains(sanitized, "my-test-auth-token") {
-		test.Error("expected auth token to be registered as a secret and redacted")
 	}
 }
 
@@ -396,8 +356,7 @@ func TestRun_HTTPModeStartsAndShutdown(test *testing.T) {
 
 func TestRun_HTTPNoAuthWarning(test *testing.T) {
 	setupServerEnv(test)
-	test.Setenv("MCP_AUTH_TOKEN", "")
-	test.Setenv("MCP_AUTH_TOKENS_FILE", "")
+	test.Setenv("MCP_CREDENTIALS_FILE", "")
 
 	listener, listenError := net.Listen("tcp", "127.0.0.1:0")
 	if listenError != nil {
