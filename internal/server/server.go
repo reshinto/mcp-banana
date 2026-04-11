@@ -102,6 +102,7 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 	})
 
 	if oauthStore != nil && serverConfig.OAuthBaseURL != "" {
+		publicMux.Handle("/.well-known/oauth-protected-resource", oauth.NewProtectedResourceHandler(serverConfig.OAuthBaseURL))
 		publicMux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
 		publicMux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
 		publicMux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))

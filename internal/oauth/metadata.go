@@ -18,6 +18,36 @@ type ServerMetadata struct {
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 }
 
+// ProtectedResourceMetadata represents the OAuth 2.0 Protected Resource Metadata
+// document as defined by RFC 9728. Claude Desktop fetches this from
+// /.well-known/oauth-protected-resource to discover which authorization server
+// protects the MCP resource.
+type ProtectedResourceMetadata struct {
+	Resource             string   `json:"resource"`
+	AuthorizationServers []string `json:"authorization_servers"`
+	BearerMethodsSupported []string `json:"bearer_methods_supported"`
+}
+
+// NewProtectedResourceHandler returns an http.Handler that serves the OAuth 2.0
+// Protected Resource Metadata document (RFC 9728). This endpoint tells clients
+// where to find the authorization server for this MCP resource.
+func NewProtectedResourceHandler(baseURL string) http.Handler {
+	metadata := ProtectedResourceMetadata{
+		Resource:             baseURL,
+		AuthorizationServers: []string{baseURL},
+		BearerMethodsSupported: []string{"header"},
+	}
+
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusOK)
+		encodeError := json.NewEncoder(writer).Encode(metadata)
+		if encodeError != nil {
+			http.Error(writer, "internal server error", http.StatusInternalServerError)
+		}
+	})
+}
+
 // NewMetadataHandler returns an http.Handler that serves the OAuth 2.1 authorization
 // server metadata document for the given baseURL. Claude Desktop uses this endpoint
 // for automatic server discovery via the /.well-known/oauth-authorization-server path.
