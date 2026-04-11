@@ -190,38 +190,76 @@ sudo ufw allow 8847/tcp
 
 ### Step 2 — Configure DNS
 
-In your domain registrar's DNS settings, create an A record:
+You need to create a DNS **A record** that points your subdomain to the server's IP address. This is done in the DNS settings of wherever you manage your domain (e.g., Namecheap, Cloudflare, GoDaddy, Google Domains).
 
-| Type | Name | Value | TTL |
-|---|---|---|---|
-| A | `mcp` | `<server-public-ip>` | 300 |
+**2.1 Log in to your domain registrar** and go to the DNS management page for your domain.
 
-This makes `mcp.yourdomain.com` resolve to your server.
+**2.2 Create an A record:**
 
-**Wait for propagation, then verify:**
+| Field | Value | Example |
+|---|---|---|
+| **Type** | `A` | A |
+| **Name** / **Host** | `mcp` (just the subdomain, not the full domain) | `mcp` |
+| **Value** / **Points to** | Your server's public IP address | `164.90.xxx.xxx` |
+| **TTL** | `300` (or "Automatic") | 300 |
+
+> **What this does:** An A record maps a hostname to an IP address. After this, `mcp.yourdomain.com` will resolve to your server's IP. DNS registrars may call the fields different names — "Host" instead of "Name", or "Points to" instead of "Value".
+
+**2.3 Wait for DNS propagation** (usually 1–5 minutes, can take up to 48 hours):
 
 ```bash
 dig mcp.yourdomain.com +short
-# Should print your server's IP
+# Should print your server's IP address
 ```
 
-If `dig` is not installed: `apt-get install -y dnsutils`
+If `dig` is not installed: `sudo apt-get install -y dnsutils`
+
+If `dig` returns nothing, the record hasn't propagated yet. Wait and try again.
 
 ### Step 3 — Obtain a TLS certificate
 
-Run certbot on the server. The DNS challenge method works without needing ports 80 or 443:
+TLS certificates enable HTTPS. Without them, browsers and Claude Desktop will refuse to connect. We use [Let's Encrypt](https://letsencrypt.org/) to get free certificates.
+
+The DNS challenge method verifies you own the domain by asking you to create a temporary DNS TXT record. This works without needing ports 80 or 443 to be free.
+
+**3.1 Run certbot:**
 
 ```bash
 sudo certbot certonly --manual --preferred-challenges dns -d mcp.yourdomain.com
 ```
 
-Certbot asks you to create a DNS TXT record:
+**3.2 Certbot will display a challenge value** and ask you to create a DNS TXT record:
 
 ```
-_acme-challenge.mcp.yourdomain.com → <value-certbot-shows>
+Please deploy a DNS TXT record under the name
+_acme-challenge.mcp.yourdomain.com with the following value:
+
+xYz123AbCdEfGhIjKlMnOpQrStUvWxYz1234567890
+
+Before continuing, verify the record is deployed.
 ```
 
-Add that TXT record in your domain registrar, wait 1–2 minutes for propagation, then press Enter in certbot.
+**3.3 Create the TXT record in your domain registrar.** Go back to your DNS settings and add:
+
+| Field | Value | Example |
+|---|---|---|
+| **Type** | `TXT` | TXT |
+| **Name** / **Host** | `_acme-challenge.mcp` | `_acme-challenge.mcp` |
+| **Value** / **Content** | Copy-paste the exact value certbot showed | `xYz123AbCdEfGhIjKlMnOpQrStUvWxYz1234567890` |
+| **TTL** | `300` (or "Automatic") | 300 |
+
+> **Important:** The value changes every time you run certbot. Always copy the value from the current certbot output — do not reuse values from previous attempts.
+
+**3.4 Wait 1–2 minutes**, then verify the TXT record propagated before pressing Enter in certbot:
+
+```bash
+dig _acme-challenge.mcp.yourdomain.com TXT +short
+# Should print the value you just added
+```
+
+If `dig` returns nothing, the record hasn't propagated yet. Wait longer before pressing Enter.
+
+**3.5 Press Enter in certbot** after the `dig` command returns your value. Certbot will verify the record and generate your certificates.
 
 **Verify the certificate was created:**
 
