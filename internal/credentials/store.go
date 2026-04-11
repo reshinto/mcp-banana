@@ -46,8 +46,12 @@ func NewStore(filePath string) (*Store, error) {
 
 // Lookup returns the Gemini API key associated with the given identity, or an
 // empty string if the identity is not found. The file is re-read on every call
-// to support hot-reload without restart.
+// to support hot-reload without restart. The mutex prevents races with
+// concurrent Register calls.
 func (store *Store) Lookup(identity string) string {
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+
 	data, readError := os.ReadFile(store.filePath)
 	if readError != nil {
 		return ""
@@ -71,6 +75,7 @@ func (store *Store) Register(identity string, geminiAPIKey string) error {
 	entries := make(map[string]string)
 	data, readError := os.ReadFile(store.filePath)
 	if readError == nil {
+		// A corrupt file is treated as empty to allow recovery via Register.
 		json.Unmarshal(data, &entries) //nolint:errcheck
 	}
 
