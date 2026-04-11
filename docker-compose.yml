@@ -1,8 +1,10 @@
 services:
   mcp-banana:
+    container_name: mcp-banana
+    image: mcp-banana
     build: .
     ports:
-      - "0.0.0.0:8847:8847"
+      - "${MCP_BIND_ADDRESS:-127.0.0.1}:8847:8847"
     env_file:
       - .env
     restart: unless-stopped

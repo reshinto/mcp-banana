@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/reshinto/mcp-banana/internal/config"
 	"github.com/reshinto/mcp-banana/internal/gemini"
+	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/security"
 	internalserver "github.com/reshinto/mcp-banana/internal/server"
 )
@@ -85,6 +87,9 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	if serverConfig.AuthToken != "" {
 		security.RegisterSecret(serverConfig.AuthToken)
 	}
+	security.RegisterSecret(serverConfig.OAuthGoogleClientSecret)
+	security.RegisterSecret(serverConfig.OAuthGitHubClientSecret)
+	security.RegisterSecret(serverConfig.OAuthAppleClientSecret)
 
 	logLevel := resolveLogLevel(serverConfig.LogLevel)
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: logLevel}))
@@ -94,18 +99,46 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	startupContext := context.Background()
-	geminiClient, clientError := clientFactory(
-		startupContext,
-		serverConfig.GeminiAPIKey,
-		serverConfig.RequestTimeoutSecs,
-		serverConfig.ProConcurrency,
-	)
-	if clientError != nil {
-		_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
-		return 1
+	var geminiClient *gemini.Client
+	var clientCache *gemini.ClientCache
+
+	if serverConfig.GeminiAPIKey != "" {
+		var clientError error
+		geminiClient, clientError = clientFactory(
+			startupContext,
+			serverConfig.GeminiAPIKey,
+			serverConfig.RequestTimeoutSecs,
+			serverConfig.ProConcurrency,
+		)
+		if clientError != nil {
+			_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
+			return 1
+		}
+		clientCache = gemini.NewClientCache(geminiClient, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
+	} else {
+		logger.Info("no GEMINI_API_KEY configured -- clients must provide their own key via X-Gemini-API-Key header")
+		clientCache = gemini.NewClientCache(nil, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 	}
 
-	mcpServer := internalserver.NewMCPServer(geminiClient, serverConfig.MaxImageBytes)
+	mcpServer := internalserver.NewMCPServer(geminiClient, clientCache, serverConfig.MaxImageBytes)
+
+	providers := oauth.BuildActiveProviders(
+		serverConfig.OAuthGoogleClientID, serverConfig.OAuthGoogleClientSecret,
+		serverConfig.OAuthGitHubClientID, serverConfig.OAuthGitHubClientSecret,
+		serverConfig.OAuthAppleClientID, serverConfig.OAuthAppleClientSecret,
+	)
+	var oauthStore *oauth.Store
+	if len(providers) > 0 {
+		oauthStore = oauth.NewStore()
+		cleanupInterval := oauthCleanupInterval
+		go func() {
+			ticker := time.NewTicker(cleanupInterval)
+			defer ticker.Stop()
+			for range ticker.C {
+				oauthStore.CleanupExpired()
+			}
+		}()
+	}
 
 	switch *transport {
 	case "stdio":
@@ -115,7 +148,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 	case "http":
-		return runHTTPServer(mcpServer, serverConfig, logger, *address)
+		return runHTTPServer(mcpServer, serverConfig, logger, *address, oauthStore, providers)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown transport: %s (must be stdio or http)\n", *transport)
 		return 1
@@ -139,9 +172,18 @@ func resolveLogLevel(level string) slog.Level {
 }
 
 // runHealthCheck performs a health check against the running server.
+// When TLS is configured (MCP_TLS_CERT_FILE is set), it uses HTTPS with
+// certificate verification skipped since the check targets localhost.
 func runHealthCheck(address string, stderr io.Writer) int {
+	scheme := "http"
 	httpClient := &http.Client{Timeout: 5 * time.Second}
-	healthResponse, fetchError := httpClient.Get(fmt.Sprintf("http://%s/healthz", address))
+	if os.Getenv("MCP_TLS_CERT_FILE") != "" {
+		scheme = "https"
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	healthResponse, fetchError := httpClient.Get(fmt.Sprintf("%s://%s/healthz", scheme, address))
 	if fetchError != nil {
 		_, _ = fmt.Fprintf(stderr, "health check failed: %s\n", fetchError)
 		return 1
@@ -162,9 +204,15 @@ var listenFunc = func(network, address string) (net.Listener, error) {
 // shutdownTimeout is the graceful shutdown duration. Overridden in tests.
 var shutdownTimeout = 120 * time.Second
 
+// oauthCleanupInterval is the interval between OAuth store cleanup runs. Overridden in tests.
+var oauthCleanupInterval = 5 * time.Minute
+
 // runHTTPServer starts the HTTP server with graceful shutdown.
-func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, logger *slog.Logger, address string) int {
-	handler := internalserver.NewHTTPHandler(mcpServer, serverConfig, logger)
+// When TLSCertFile and TLSKeyFile are both set in serverConfig, the server
+// listens with TLS. oauthStore and providers are passed through to NewHTTPHandler
+// to optionally register OAuth 2.1 routes.
+func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, logger *slog.Logger, address string, oauthStore *oauth.Store, providers []oauth.ProviderConfig) int {
+	handler := internalserver.NewHTTPHandler(mcpServer, serverConfig, logger, oauthStore, providers)
 	httpServer := &http.Server{
 		Handler:     handler,
 		ReadTimeout: 30 * time.Second,
@@ -190,8 +238,15 @@ func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, log
 		}
 	}()
 
-	logger.Info("starting mcp-banana in HTTP mode", "addr", address, "version", version)
-	if serveError := httpServer.Serve(listener); serveError != nil && serveError != http.ErrServerClosed {
+	var serveError error
+	if serverConfig.TLSCertFile != "" && serverConfig.TLSKeyFile != "" {
+		logger.Info("starting HTTPS server", "address", address)
+		serveError = httpServer.ServeTLS(listener, serverConfig.TLSCertFile, serverConfig.TLSKeyFile)
+	} else {
+		logger.Info("starting HTTP server", "address", address)
+		serveError = httpServer.Serve(listener)
+	}
+	if serveError != nil && serveError != http.ErrServerClosed {
 		_, _ = fmt.Fprintf(os.Stderr, "HTTP server error: %s\n", serveError)
 		return 1
 	}

@@ -15,8 +15,8 @@ import (
 // Config holds all server configuration loaded from environment variables.
 // This struct is created once at startup and passed to components that need it.
 //
-// SECURITY: GeminiAPIKey and AuthToken are secrets. They must never appear
-// in any tool response, log output, error message, or health check.
+// SECURITY: GeminiAPIKey, AuthToken, and OAuth client secrets are secrets. They must
+// never appear in any tool response, log output, error message, or health check.
 type Config struct {
 	GeminiAPIKey       string // The Google Gemini API key for authentication
 	AuthToken          string // Single bearer token for HTTP auth (optional, legacy)
@@ -27,6 +27,19 @@ type Config struct {
 	ProConcurrency     int    // Maximum simultaneous requests for Pro model (default: 3)
 	MaxImageBytes      int    // Maximum decoded image size in bytes (default: 4MB)
 	RequestTimeoutSecs int    // Timeout for each Gemini API call in seconds (default: 120)
+
+	// OAuth provider credentials (all optional; omit a provider by leaving its ID or secret empty)
+	OAuthGoogleClientID     string // Google OAuth 2.0 client ID
+	OAuthGoogleClientSecret string // Google OAuth 2.0 client secret (SECURITY: never log)
+	OAuthGitHubClientID     string // GitHub OAuth 2.0 client ID
+	OAuthGitHubClientSecret string // GitHub OAuth 2.0 client secret (SECURITY: never log)
+	OAuthAppleClientID      string // Apple Sign-In client ID
+	OAuthAppleClientSecret  string // Apple Sign-In client secret (SECURITY: never log)
+	OAuthBaseURL            string // Public base URL for OAuth redirect and metadata endpoints
+
+	// TLS configuration (both MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set together, or neither)
+	TLSCertFile string // Path to TLS certificate PEM file
+	TLSKeyFile  string // Path to TLS private key PEM file
 }
 
 // Load reads configuration from environment variables and validates it.
@@ -35,9 +48,9 @@ type Config struct {
 // not when the first request arrives.
 func Load() (*Config, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
-		return nil, errors.New("GEMINI_API_KEY is required")
-	}
+	// GEMINI_API_KEY is optional when clients provide their own key via the
+	// X-Gemini-API-Key header. If neither is set, image generation requests
+	// will fail at runtime with a clear error.
 
 	authToken := os.Getenv("MCP_AUTH_TOKEN")
 	authTokensFile := os.Getenv("MCP_AUTH_TOKENS_FILE")
@@ -93,7 +106,7 @@ func Load() (*Config, error) {
 		return nil, errors.New("MCP_REQUEST_TIMEOUT_SECS must be a positive integer")
 	}
 
-	return &Config{
+	cfg := &Config{
 		GeminiAPIKey:       apiKey,
 		AuthToken:          authToken,
 		AuthTokensFile:     authTokensFile,
@@ -103,7 +116,32 @@ func Load() (*Config, error) {
 		ProConcurrency:     proConcurrency,
 		MaxImageBytes:      maxImageBytes,
 		RequestTimeoutSecs: requestTimeoutSecs,
-	}, nil
+	}
+
+	// OAuth provider configuration (all optional)
+	cfg.OAuthGoogleClientID = os.Getenv("OAUTH_GOOGLE_CLIENT_ID")
+	cfg.OAuthGoogleClientSecret = os.Getenv("OAUTH_GOOGLE_CLIENT_SECRET")
+	cfg.OAuthGitHubClientID = os.Getenv("OAUTH_GITHUB_CLIENT_ID")
+	cfg.OAuthGitHubClientSecret = os.Getenv("OAUTH_GITHUB_CLIENT_SECRET")
+	cfg.OAuthAppleClientID = os.Getenv("OAUTH_APPLE_CLIENT_ID")
+	cfg.OAuthAppleClientSecret = os.Getenv("OAUTH_APPLE_CLIENT_SECRET")
+	cfg.OAuthBaseURL = os.Getenv("OAUTH_BASE_URL")
+	// Auto-derive OAUTH_BASE_URL from MCP_DOMAIN if not explicitly set
+	if cfg.OAuthBaseURL == "" {
+		mcpDomain := os.Getenv("MCP_DOMAIN")
+		if mcpDomain != "" {
+			cfg.OAuthBaseURL = "https://" + mcpDomain + ":8847"
+		}
+	}
+
+	// TLS configuration (both required together, or neither)
+	cfg.TLSCertFile = os.Getenv("MCP_TLS_CERT_FILE")
+	cfg.TLSKeyFile = os.Getenv("MCP_TLS_KEY_FILE")
+	if (cfg.TLSCertFile != "" && cfg.TLSKeyFile == "") || (cfg.TLSCertFile == "" && cfg.TLSKeyFile != "") {
+		return nil, fmt.Errorf("both MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set together")
+	}
+
+	return cfg, nil
 }
 
 // getEnvInt reads an integer from an environment variable, returning the

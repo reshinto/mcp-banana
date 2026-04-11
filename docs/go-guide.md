@@ -2,42 +2,91 @@
 
 This guide explains the Go language concepts used in mcp-banana, with examples drawn directly from the codebase. It is written for developers who are new to Go.
 
+---
+
 ## 1. Packages and Imports
 
-Every Go file begins with a `package` declaration. Files in the same directory share a package. The `internal/` prefix is a Go convention that prevents packages inside it from being imported by code outside the module.
+Every Go file begins with a `package` declaration. Files in the same directory share a package name and can access each other's unexported identifiers. The `internal/` path prefix is enforced by the Go toolchain: code outside the module root cannot import anything under `internal/`.
 
 ```go
 // internal/config/config.go
 package config
 ```
 
-Imports are grouped: standard library first, then third-party, then internal packages. A blank line separates each group.
-
-```go
-import (
-    "errors"
-    "fmt"
-    "os"
-    "strconv"
-    "strings"
-)
-```
-
-When two packages have the same base name, an alias resolves the conflict:
+An import alias renames a package locally to avoid a name collision. Here, the external `server` package is aliased to `mcpserver` so it does not shadow the local `server` package:
 
 ```go
 // cmd/mcp-banana/main.go
 import (
+    // standard library
+    "context"
+    "fmt"
+    "os"
+
+    // third-party
     "github.com/mark3labs/mcp-go/server"
+
+    // internal — aliased to avoid collision with the external "server"
     internalserver "github.com/reshinto/mcp-banana/internal/server"
 )
 ```
 
-Here `internalserver` is used to call `internalserver.NewMCPServer()` while `server.ServeStdio()` refers to the mcp-go package.
+Why three groups with blank lines between them? `gofmt` enforces a canonical import style; separate groups signal to readers exactly where a dependency comes from at a glance.
 
-## 2. Structs and Types
+---
 
-A struct groups related fields. Struct tags (the backtick annotations) control JSON serialization:
+## 2. Variables and Types
+
+`var` declares a package-level variable. `const` declares a compile-time constant. A type declaration creates a new named type.
+
+```go
+// cmd/mcp-banana/main.go
+var version = "dev"           // set at build time via -ldflags
+
+// internal/server/middleware.go
+const (
+    maxBodyBytes    = 15 * 1024 * 1024
+    concurrencyTimeout = 5 * time.Second
+)
+```
+
+`strconv.Atoi` converts a string to an `int`. The second return value is an error (see Section 5):
+
+```go
+// internal/config/config.go
+parsed, parseError := strconv.Atoi(rawValue)
+```
+
+---
+
+## 3. Structs and Struct Tags
+
+A struct groups related fields. Struct tags (backtick annotations) tell `encoding/json` how to name each field in JSON output. The `SafeModelInfo` type deliberately omits the internal `GeminiID` field — the struct shape is the security boundary.
+
+```go
+// internal/gemini/registry.go
+
+// ModelInfo is INTERNAL — never expose to clients.
+type ModelInfo struct {
+    Alias          string
+    GeminiID       string // INTERNAL ONLY
+    Description    string
+    Capabilities   []string
+    TypicalLatency string
+    BestFor        string
+}
+
+// SafeModelInfo contains only the fields safe to expose to Claude Code.
+type SafeModelInfo struct {
+    Alias          string   `json:"id"`
+    Description    string   `json:"description"`
+    Capabilities   []string `json:"capabilities"`
+    TypicalLatency string   `json:"typical_latency"`
+    BestFor        string   `json:"best_for"`
+}
+```
+
+Similarly, `ImageResult` uses JSON tags so `json.Marshal` in the tool handler produces the correct field names:
 
 ```go
 // internal/gemini/service.go
@@ -49,69 +98,67 @@ type ImageResult struct {
 }
 ```
 
-`json:"image_base64"` means the field serializes to `"image_base64"` in JSON output (snake_case rather than Go's PascalCase).
+---
 
-The `Config` struct holds all server settings loaded from environment variables:
+## 4. Functions and Methods
+
+Go functions can return multiple values. The idiomatic pattern is `(result, error)`. A method is a function with a receiver; pointer receivers (`*Client`) let the method mutate the value and avoid copying.
+
+```go
+// internal/gemini/client.go
+func NewClient(startupContext context.Context, apiKey string, timeoutSecs int, proConcurrency int) (*Client, error) {
+    inner, clientError := genaiClientFactory(startupContext, &genai.ClientConfig{
+        APIKey:  apiKey,
+        Backend: genai.BackendGeminiAPI,
+    })
+    if clientError != nil {
+        return nil, fmt.Errorf("failed to create genai client: %w", clientError)
+    }
+    return &Client{
+        generator:    inner.Models,
+        timeoutSecs:  timeoutSecs,
+        proSemaphore: make(chan struct{}, proConcurrency),
+    }, nil
+}
+
+// GenerateImage is a method on *Client.
+func (client *Client) GenerateImage(requestContext context.Context, modelAlias string, prompt string, options GenerateOptions) (*ImageResult, error) {
+    ...
+}
+```
+
+Named return values document intent and can be used with a bare `return`, but mcp-banana avoids bare returns for clarity. The `buildGenerateInputs` function uses named returns as documentation only:
+
+```go
+// internal/gemini/client.go
+func buildGenerateInputs(prompt string, modelID string, aspectRatio string) (modelName string, contents []*genai.Content, config *genai.GenerateContentConfig) {
+    modelName = modelID
+    ...
+    return modelName, contents, config
+}
+```
+
+---
+
+## 5. Error Handling
+
+Go errors are values. Functions signal failure by returning a non-nil `error`. `errors.New` creates a plain error; `fmt.Errorf` with `%w` wraps an existing error so callers can unwrap it with `errors.As`.
 
 ```go
 // internal/config/config.go
-type Config struct {
-    GeminiAPIKey       string
-    AuthToken          string
-    LogLevel           string
-    RateLimit          int
-    GlobalConcurrency  int
-    ProConcurrency     int
-    MaxImageBytes      int
-    RequestTimeoutSecs int
+if rateLimit <= 0 {
+    return nil, errors.New("MCP_RATE_LIMIT must be a positive integer")
 }
-```
 
-## 3. Functions and Methods
-
-Functions can return multiple values. The convention is to return `(result, error)`:
-
-```go
-// internal/config/config.go
-func Load() (*Config, error) {
-    // ...
-    return &Config{...}, nil  // success: non-nil config, nil error
-    // return nil, errors.New("...")  // failure: nil config, non-nil error
+if (cfg.TLSCertFile != "" && cfg.TLSKeyFile == "") || ... {
+    return nil, fmt.Errorf("both MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set together")
 }
+
+// Wrapping: the %w verb embeds the original error so errors.As can find it.
+return nil, fmt.Errorf("failed to create genai client: %w", clientError)
 ```
 
-A method is a function with a receiver. A pointer receiver (`*Client`) means the method can modify the receiver's state and avoids copying a large struct:
-
-```go
-// internal/server/middleware.go
-func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
-    // mw is a pointer to the middleware struct
-}
-```
-
-## 4. Error Handling
-
-Go does not use exceptions. Functions return errors as values. The caller checks the error immediately:
-
-```go
-// cmd/mcp-banana/main.go
-serverConfig, loadError := config.Load()
-if loadError != nil {
-    fmt.Fprintf(os.Stderr, "failed to load config: %s\n", loadError)
-    os.Exit(1)
-}
-```
-
-`errors.New` creates a simple error with a fixed message. `fmt.Errorf` creates a formatted error; the `%w` verb wraps an existing error so callers can unwrap it:
-
-```go
-// internal/config/config.go
-return nil, errors.New("GEMINI_API_KEY is required")
-return 0, fmt.Errorf("%s must be a valid integer, got %q", name, rawValue)
-return nil, fmt.Errorf("failed to create genai client: %w", err)
-```
-
-`errors.As` unwraps an error chain to check whether any wrapped error is a specific type:
+`errors.As` traverses the error chain and type-asserts into a target type. The security boundary in `MapError` uses this to extract the HTTP status from a Gemini SDK error without leaking raw error text:
 
 ```go
 // internal/gemini/errors.go
@@ -122,9 +169,22 @@ if errors.As(inputError, &apiErrorPointer) {
 }
 ```
 
-## 5. Interfaces and Dependency Injection
+Oversized HTTP body detection uses the same pattern:
 
-An interface defines a set of method signatures. Any type that implements all the methods satisfies the interface — no explicit declaration is needed.
+```go
+// internal/server/middleware.go
+var maxBytesError *http.MaxBytesError
+if errors.As(readError, &maxBytesError) {
+    writeJSONError(writer, http.StatusRequestEntityTooLarge, "request_too_large")
+    return
+}
+```
+
+---
+
+## 6. Interfaces and Dependency Injection
+
+An interface defines a set of method signatures. Any type that implements all methods satisfies the interface — no explicit declaration is required. Accepting an interface instead of a concrete type lets callers inject fakes or mocks in tests.
 
 ```go
 // internal/gemini/service.go
@@ -134,123 +194,202 @@ type GeminiService interface {
 }
 ```
 
-`*Client` satisfies `GeminiService` because it has both methods. Tests use a mock struct that also satisfies the interface, allowing handlers to be tested without a real Gemini API key:
+`*Client` satisfies `GeminiService` because it implements both methods. The tool handler accepts `GeminiService`, not `*Client`, so tests can pass a struct that returns canned responses:
 
 ```go
-// internal/tools/tools_test.go
-type mockGeminiService struct {
-    generateResult *gemini.ImageResult
-    generateError  error
-}
-
-func (mock *mockGeminiService) GenerateImage(...) (*gemini.ImageResult, error) {
-    return mock.generateResult, mock.generateError
+// internal/server/server.go
+func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
+    ...
+    srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(service, clientCache, maxImageBytes))
 }
 ```
 
-The handler factory accepts `gemini.GeminiService` (the interface), not `*gemini.Client` (the concrete type). This is dependency injection:
+The internal `contentGenerator` interface follows the same pattern for the genai SDK call — `client.go` only depends on the interface, making `GenerateContent` replaceable in tests without a real API key.
+
+---
+
+## 7. Closures
+
+A closure is a function literal that captures variables from its enclosing scope. Handler factories in `internal/tools/` return closures that close over `service`, `clientCache`, and `maxImageBytes`:
 
 ```go
 // internal/tools/generate.go
-func NewGenerateImageHandler(service gemini.GeminiService, maxImageBytes int) func(...) {
-    // service could be *Client in production or *mockGeminiService in tests
-}
-```
-
-## 6. Closures and Higher-Order Functions
-
-A closure is a function that captures variables from its enclosing scope. Handler factories return closures that capture their dependencies:
-
-```go
-// internal/tools/generate.go
-func NewGenerateImageHandler(service gemini.GeminiService, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func NewGenerateImageHandler(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
     return func(requestContext context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-        // 'service' and 'maxImageBytes' are captured from the outer function
-        result, err := service.GenerateImage(requestContext, modelAlias, prompt, gemini.GenerateOptions{
-            AspectRatio: aspectRatio,
-        })
-        // ...
+        // service, clientCache, and maxImageBytes are captured from the outer scope.
+        resolvedService := service
+        ...
     }
 }
 ```
 
-The returned function closes over `service` and `maxImageBytes`. Each call to `NewGenerateImageHandler` produces a fresh handler with its own captured state.
-
-## 7. Context
-
-`context.Context` carries deadlines, cancellation signals, and request-scoped values. It is always the first parameter and always named descriptively (here `requestContext`, `startupContext`, `timeoutContext`, `shutdownContext`):
-
-```go
-// internal/gemini/client.go
-func (client *Client) GenerateImage(requestContext context.Context, ...) (*ImageResult, error) {
-    timeoutContext, cancel := context.WithTimeout(requestContext, time.Duration(client.timeoutSecs)*time.Second)
-    defer cancel()
-    resp, err := client.inner.Models.GenerateContent(timeoutContext, ...)
-}
-```
-
-`context.WithTimeout` returns a derived context that automatically cancels after the specified duration. The `cancel` function must always be called (via `defer`) to release resources even if the timeout fires first.
-
-## 8. Goroutines and Channels
-
-A goroutine is a lightweight concurrent function started with `go`. Channels pass values between goroutines safely.
-
-The HTTP server runs its shutdown logic in a goroutine that waits for a signal:
+The OAuth cleanup goroutine also uses a closure to capture `oauthStore`:
 
 ```go
 // cmd/mcp-banana/main.go
-stopChan := make(chan os.Signal, 1)
+go func() {
+    ticker := time.NewTicker(cleanupInterval)
+    defer ticker.Stop()
+    for range ticker.C {
+        oauthStore.CleanupExpired() // oauthStore captured from outer scope
+    }
+}()
+```
+
+---
+
+## 8. context.Context
+
+`context.Context` carries deadlines, cancellation signals, and request-scoped values through a call chain. Every function that performs I/O accepts a `ctx context.Context` as its first parameter.
+
+`context.WithTimeout` creates a child context that cancels automatically after the duration. The cancel function must always be called (via `defer`) to free resources:
+
+```go
+// internal/gemini/client.go
+timeoutContext, cancel := context.WithTimeout(requestContext, time.Duration(client.timeoutSecs)*time.Second)
+defer cancel()
+
+resp, generateError := client.generator.GenerateContent(timeoutContext, modelName, contents, config)
+```
+
+`context.WithValue` attaches a value to a context. A private named type for the key prevents collisions with keys from other packages:
+
+```go
+// internal/gemini/context.go
+type contextKey string
+const apiKeyContextKey contextKey = "gemini-api-key"
+
+func WithAPIKey(ctx context.Context, apiKey string) context.Context {
+    return context.WithValue(ctx, apiKeyContextKey, apiKey)
+}
+
+func APIKeyFromContext(ctx context.Context) string {
+    value, _ := ctx.Value(apiKeyContextKey).(string) // type assertion with ok-idiom
+    return value
+}
+```
+
+The middleware stores the per-request key in the context; the tool handler reads it back. The two packages share no global state — only the context value travels between them.
+
+---
+
+## 9. Goroutines and Channels
+
+The `go` keyword launches a goroutine — a lightweight concurrent function. Channels are typed conduits for communication between goroutines.
+
+**Signal handling** uses a buffered channel so the OS signal is never dropped even if the receiver is not yet waiting:
+
+```go
+// cmd/mcp-banana/main.go
+stopChan := make(chan os.Signal, 1) // buffered: size 1
 signal.Notify(stopChan, syscall.SIGTERM, syscall.SIGINT)
 
 go func() {
-    sig := <-stopChan   // block until a signal arrives
-    shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), 120*time.Second)
+    sig := <-stopChan // block until signal arrives
+    shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
     defer shutdownCancel()
     httpServer.Shutdown(shutdownContext)
 }()
 ```
 
-A buffered channel acts as a semaphore. The pro-model concurrency limit works by attempting to send to a full channel:
+**Pre-filled channel semaphore** limits global concurrency. The channel is pre-filled with `struct{}{}` tokens; each request must receive one before proceeding, then returns it via `defer`:
 
 ```go
-// internal/gemini/client.go
-client.proSemaphore: make(chan struct{}, proConcurrency),
+// internal/server/middleware.go
+semaphore := make(chan struct{}, cfg.GlobalConcurrency)
+for slotIndex := 0; slotIndex < cfg.GlobalConcurrency; slotIndex++ {
+    semaphore <- struct{}{}
+}
 
-// acquiring the semaphore slot:
+// In the handler:
 select {
-case client.proSemaphore <- struct{}{}:
-    defer func() { <-client.proSemaphore }()
-case <-requestContext.Done():
-    return nil, fmt.Errorf(...)
+case slot := <-mw.semaphore:
+    defer func() { mw.semaphore <- slot }()
+case <-time.After(concurrencyTimeout):
+    writeJSONError(writer, http.StatusServiceUnavailable, "server_busy")
+    return
 }
 ```
 
-`select` blocks until one of its cases can proceed. If both are ready simultaneously, Go picks one at random.
-
-## 9. Defer
-
-`defer` schedules a function call to run when the surrounding function returns, regardless of how it returns (normal, panic, early return). Common uses in this codebase:
+**Empty channel semaphore** for the pro model works the opposite way — sending claims a slot, receiving releases it:
 
 ```go
-// cancelling a context:
-defer cancel()
+// internal/gemini/client.go
+proSemaphore: make(chan struct{}, proConcurrency), // starts empty
 
-// releasing a semaphore slot:
-defer func() { <-client.proSemaphore }()
+// Claim a slot (send), or abort if context is done:
+select {
+case client.proSemaphore <- struct{}{}:
+    defer func() { <-client.proSemaphore }() // release on return
+case <-requestContext.Done():
+    return nil, fmt.Errorf("%s: %s", ErrServerError, "request cancelled while waiting for pro model slot")
+}
+```
 
-// panic recovery in middleware:
+---
+
+## 10. Defer
+
+`defer` schedules a function call to run when the surrounding function returns, regardless of how it returns (normal return, early return, or panic). Common uses: closing resources, releasing locks, and panic recovery.
+
+```go
+// internal/gemini/client.go
+timeoutContext, cancel := context.WithTimeout(requestContext, ...)
+defer cancel() // always called, even if GenerateContent panics
+
+// internal/server/middleware.go — panic recovery
 defer func() {
     if recovered := recover(); recovered != nil {
+        mw.logger.Error("panic recovered in HTTP handler", "recovered", recovered)
         writeJSONError(writer, http.StatusInternalServerError, "server_error")
     }
 }()
+
+// internal/oauth/store.go — mutex unlock
+func (store *Store) RegisterClient(client *Client) {
+    store.mutex.Lock()
+    defer store.mutex.Unlock()
+    store.clients[client.ClientID] = client
+}
 ```
 
-Multiple defers stack and run in last-in, first-out order.
+---
 
-## 10. Sync Primitives
+## 11. sync.RWMutex
 
-`sync.RWMutex` allows many concurrent readers or one exclusive writer. It protects the registered-secrets slice in the sanitizer:
+`sync.RWMutex` allows multiple concurrent readers (`RLock`/`RUnlock`) but only one writer (`Lock`/`Unlock`). This is more efficient than a plain `sync.Mutex` for read-heavy workloads.
+
+`ClientCache` uses the **double-check pattern** to avoid creating the same client twice under concurrent load:
+
+```go
+// internal/gemini/cache.go
+func (cache *ClientCache) GetClient(ctx context.Context, apiKey string) (*Client, error) {
+    // Fast path: read lock only.
+    cache.mutex.RLock()
+    existing, found := cache.clients[apiKey]
+    cache.mutex.RUnlock()
+    if found {
+        return existing, nil
+    }
+
+    // Slow path: promote to write lock.
+    cache.mutex.Lock()
+    defer cache.mutex.Unlock()
+
+    // Re-check: another goroutine may have created the client between our
+    // read-unlock and write-lock.
+    if existing, found = cache.clients[apiKey]; found {
+        return existing, nil
+    }
+
+    created, clientError := NewClient(ctx, apiKey, cache.timeoutSecs, cache.proConcurrency)
+    ...
+    cache.clients[apiKey] = created
+    return created, nil
+}
+```
+
+The secret sanitizer in `internal/security/sanitize.go` follows the same read/write lock split:
 
 ```go
 // internal/security/sanitize.go
@@ -260,43 +399,42 @@ var (
 )
 
 func RegisterSecret(secret string) {
-    secretsMutex.Lock()         // exclusive write lock
+    secretsMutex.Lock()
     defer secretsMutex.Unlock()
     registeredSecrets = append(registeredSecrets, secret)
 }
 
 func SanitizeString(input string) string {
-    secretsMutex.RLock()        // shared read lock
+    secretsMutex.RLock()
     secrets := make([]string, len(registeredSecrets))
     copy(secrets, registeredSecrets)
     secretsMutex.RUnlock()
-    // ...
+    ...
 }
 ```
 
-The read lock (`RLock`) is released before the loop runs so that sanitization does not hold the lock while doing string replacement work.
+---
 
-## 11. Maps and Slices
+## 12. Maps and Slices
 
-Maps are used for O(1) membership checks. The zero value of a missing key is `false` for `bool` maps and the zero struct for `struct{}` maps:
+`map[K]V` is Go's hash map. `map[string]struct{}` is the idiomatic set — `struct{}` uses zero bytes. Membership is tested with the two-value form of a map lookup:
 
 ```go
-// internal/config/config.go
-validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
-if !validLevels[logLevel] {
-    return nil, errors.New("MCP_LOG_LEVEL must be one of: debug, info, warn, error")
+// internal/security/validate.go
+var validAspectRatios = map[string]struct{}{
+    "1:1":  {},
+    "16:9": {},
+    "9:16": {},
+    "4:3":  {},
+    "3:4":  {},
 }
 
-// internal/security/validate.go — struct{} uses no memory for the value
-var validAspectRatios = map[string]struct{}{
-    "1:1": {}, "16:9": {}, "9:16": {}, "4:3": {}, "3:4": {},
-}
 if _, ok := validAspectRatios[ratio]; !ok {
-    return fmt.Errorf("invalid aspect ratio ...")
+    return fmt.Errorf("invalid aspect ratio %q", ratio)
 }
 ```
 
-Pre-allocating a slice with `make` avoids repeated reallocations when the size is known:
+`make([]T, 0, n)` pre-allocates a slice with capacity `n`, avoiding repeated allocations when appending in a loop:
 
 ```go
 // internal/gemini/registry.go
@@ -306,9 +444,20 @@ for _, model := range registry {
 }
 ```
 
-## 12. String and Encoding
+`range` over a map gives `key, value` pairs; `range` over a channel receives values until the channel is closed:
 
-`utf8.RuneCountInString` counts Unicode code points (runes), not bytes. This correctly limits prompt length for multi-byte characters:
+```go
+// cmd/mcp-banana/main.go
+for range ticker.C { // receive each tick; discard the value
+    oauthStore.CleanupExpired()
+}
+```
+
+---
+
+## 13. Strings and Encoding
+
+`utf8.RuneCountInString` counts Unicode code points (runes), not bytes — essential for multi-byte characters in prompts:
 
 ```go
 // internal/security/validate.go
@@ -317,7 +466,7 @@ if utf8.RuneCountInString(prompt) > maxPromptRunes {
 }
 ```
 
-`base64.StdEncoding.DecodeString` decodes base64 to bytes. `base64.StdEncoding.EncodeToString` does the reverse:
+`base64.StdEncoding.DecodeString` / `EncodeToString` convert between raw bytes and base64 strings. Image data travels as base64 over the MCP protocol:
 
 ```go
 // internal/security/validate.go
@@ -327,125 +476,250 @@ decoded, err := base64.StdEncoding.DecodeString(encoded)
 encoded := base64.StdEncoding.EncodeToString(part.InlineData.Data)
 ```
 
-`json.Marshal` serializes a Go value to JSON bytes. The result is cast to `string` before being returned in the MCP response:
+`hex.EncodeToString` converts random bytes to a safe ASCII token:
 
 ```go
-// internal/tools/generate.go
-jsonBytes, marshalErr := json.Marshal(result)
-return mcp.NewToolResultText(string(jsonBytes)), nil
+// internal/oauth/pkce.go
+return hex.EncodeToString(randomBytes), nil
 ```
 
-`regexp.MustCompile` compiles a regular expression at package initialization. `MustCompile` panics on a bad pattern, catching bugs at startup rather than at runtime:
+`regexp.MustCompile` compiles a regular expression at package init time; `MustCompile` panics if the pattern is invalid, catching bugs at startup rather than at runtime:
 
 ```go
 // internal/security/sanitize.go
 var geminiAPIKeyPattern = regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`)
+
+output = geminiAPIKeyPattern.ReplaceAllString(output, redacted)
 ```
 
-## 13. HTTP Server
-
-`http.Handler` is an interface with a single method: `ServeHTTP(ResponseWriter, *Request)`. `http.HandlerFunc` adapts a plain function to that interface:
+`json.Marshal` / `json.Unmarshal` serialize and deserialize structs. `json.NewEncoder(w).Encode(v)` streams JSON directly to an `io.Writer`:
 
 ```go
-// internal/server/server.go
-mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
-    writer.Header().Set("Content-Type", "application/json")
-    writer.WriteHeader(http.StatusOK)
-    writer.Write([]byte(`{"status":"ok"}`))
+// internal/tools/generate.go
+jsonBytes, _ := json.Marshal(result)
+return mcp.NewToolResultText(string(jsonBytes)), nil
+
+// internal/oauth/handler.go
+json.NewEncoder(writer).Encode(map[string]string{
+    "error":             "invalid_grant",
+    "error_description": "invalid or expired code",
 })
 ```
 
-`http.ServeMux` routes requests to handlers by path prefix. An `http.Server` struct adds timeouts:
+---
+
+## 14. net/http
+
+`http.Handler` is an interface with a single method: `ServeHTTP(ResponseWriter, *Request)`. `http.HandlerFunc` is an adapter type that lets a plain function satisfy the interface:
+
+```go
+// internal/oauth/handler.go
+return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+    ...
+})
+```
+
+`http.ServeMux` routes requests by path prefix. `Handle` registers an `http.Handler`; `HandleFunc` registers a plain function:
+
+```go
+// internal/server/server.go
+mux := http.NewServeMux()
+mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
+    writer.WriteHeader(http.StatusOK)
+    writer.Write([]byte(`{"status":"ok"}`))
+})
+mux.Handle("/mcp", streamableHandler)
+```
+
+`http.Server` with explicit timeouts prevents slow-client attacks:
 
 ```go
 // cmd/mcp-banana/main.go
 httpServer := &http.Server{
-    Addr:        *address,
     Handler:     handler,
     ReadTimeout: 30 * time.Second,
     IdleTimeout: 120 * time.Second,
 }
 ```
 
-Graceful shutdown drains in-flight requests before exiting:
+`ServeTLS` vs `Serve` — both accept a `net.Listener`; `ServeTLS` also loads TLS credentials:
 
 ```go
-httpServer.Shutdown(shutdownContext)
+if serverConfig.TLSCertFile != "" && serverConfig.TLSKeyFile != "" {
+    serveError = httpServer.ServeTLS(listener, serverConfig.TLSCertFile, serverConfig.TLSKeyFile)
+} else {
+    serveError = httpServer.Serve(listener)
+}
 ```
 
-## 14. Flags and Configuration
+`httptest.NewRecorder` / `httptest.NewRequest` create in-memory request/response pairs for handler tests without starting a real server.
 
-The `flag` package parses command-line arguments:
+---
+
+## 15. embed
+
+The `//go:embed` directive instructs the compiler to bundle files from the filesystem into the binary. `embed.FS` is a read-only virtual filesystem. `template.ParseFS` reads templates from it:
+
+```go
+// internal/oauth/handler.go
+import "embed"
+
+//go:embed login.html
+var loginPageFS embed.FS
+
+loginTemplate := template.Must(template.ParseFS(loginPageFS, "login.html"))
+```
+
+Why embed? The deployed binary is a single file (distroless Docker image with no shell). Embedding the HTML file means there is no runtime dependency on the filesystem.
+
+---
+
+## 16. html/template
+
+`html/template` auto-escapes all values injected into HTML, preventing XSS. `template.Must` wraps `ParseFS` and panics if the template cannot be parsed — a startup failure is better than silently serving broken HTML:
+
+```go
+// internal/oauth/handler.go
+loginTemplate := template.Must(template.ParseFS(loginPageFS, "login.html"))
+
+renderError := loginTemplate.Execute(writer, map[string]interface{}{
+    "Providers": providerLinks,
+})
+```
+
+Values in `{{ .Providers }}` are automatically HTML-escaped. Never use `text/template` for HTML output — it does not escape.
+
+---
+
+## 17. crypto/rand
+
+`crypto/rand.Read` fills a byte slice with cryptographically secure random data from the OS. Always use `crypto/rand` for tokens, nonces, and secrets — never `math/rand`, which is deterministic given the same seed.
+
+```go
+// internal/oauth/pkce.go
+import "crypto/rand"
+
+var GenerateRandomToken = func(byteLength int) (string, error) {
+    randomBytes := make([]byte, byteLength)
+    _, readError := rand.Read(randomBytes)
+    if readError != nil {
+        return "", readError
+    }
+    return hex.EncodeToString(randomBytes), nil
+}
+```
+
+`GenerateRandomToken` is a `var` holding a function (not a plain function) so tests can replace it with a version that returns a fixed string or an error.
+
+---
+
+## 18. Package-Level Variables for Testing
+
+Go has no built-in dependency injection framework. A common pattern is to declare dependencies as package-level `var` values that hold functions or interfaces. Tests replace them before calling the code under test, then restore the original via `defer`.
 
 ```go
 // cmd/mcp-banana/main.go
-transport := flag.String("transport", "stdio", "Transport mode: stdio or http")
-address   := flag.String("addr", "0.0.0.0:8847", "Address to listen on (HTTP mode only)")
-flag.Parse()
 
-// *transport dereferences the pointer to get the string value
-if *transport == "http" { ... }
+// osExit is os.Exit, overridden in tests to prevent process termination.
+var osExit = os.Exit
+
+// clientFactory creates a Gemini API client. Overridden in tests.
+var clientFactory = func(ctx context.Context, apiKey string, timeoutSecs int, proConcurrency int) (*Client, error) {
+    return gemini.NewClient(ctx, apiKey, timeoutSecs, proConcurrency)
+}
+
+// stdioServe runs the MCP server in stdio mode. Overridden in tests.
+var stdioServe = func(mcpServer *server.MCPServer) error {
+    return server.ServeStdio(mcpServer)
+}
 ```
 
-Build-time version injection uses `-ldflags`:
-
+In a test:
 ```go
-// cmd/mcp-banana/main.go
-var version = "dev"  // overridden at build time
-
-// Makefile:
-// go build -ldflags="-X main.version=1.0.0" ...
+original := genaiClientFactory
+defer func() { genaiClientFactory = original }()
+genaiClientFactory = func(_ context.Context, _ *genai.ClientConfig) (*genai.Client, error) {
+    return nil, errors.New("simulated factory failure")
+}
 ```
 
-## 15. Testing
+---
 
-Test files end in `_test.go`. Test functions take `*testing.T` as their sole argument (named `test` in this codebase, not `t`, per the no-single-char-variable rule):
+## 19. Testing
+
+Test files end in `_test.go` and live next to the source they test. The test function parameter is named `test` (not `t`) per this project's convention.
+
+**Table-driven tests** express many cases compactly:
 
 ```go
-// internal/tools/tools_test.go
-func TestGenerateImageHandler_Success(test *testing.T) {
-    svc := &mockGeminiService{generateResult: stubImageResult()}
-    handler := NewGenerateImageHandler(svc, 10*1024*1024)
-
-    result, err := handler(context.Background(), req)
-    if err != nil {
-        test.Fatalf("expected no Go error, got: %v", err)
+// internal/gemini/errors_test.go pattern (representative)
+func TestMapError_HTTPStatus(test *testing.T) {
+    cases := []struct {
+        name     string
+        status   int
+        wantCode string
+    }{
+        {"bad_request", 400, "content_policy_violation"},
+        {"too_many_requests", 429, "quota_exceeded"},
+        {"server_error", 500, "generation_failed"},
+    }
+    for _, tc := range cases {
+        test.Run(tc.name, func(test *testing.T) {
+            code, _ := MapError(&genai.APIError{Code: tc.status})
+            if code != tc.wantCode {
+                test.Errorf("got %q, want %q", code, tc.wantCode)
+            }
+        })
     }
 }
 ```
 
-`test.Fatalf` stops the current test immediately. `test.Errorf` records a failure but continues running. `test.Helper()` marks a function as a test helper so that failure lines point to the caller:
+`test.Setenv` sets an environment variable for the duration of the test and restores it automatically on cleanup — no manual teardown needed.
+
+`test.Cleanup` registers a function to run when the test ends, equivalent to `defer` but usable in helper functions:
 
 ```go
-func extractTextContent(test *testing.T, result *mcp.CallToolResult) string {
-    test.Helper()
-    // ...
-}
+// internal/gemini/cache_test.go
+test.Cleanup(func() { afterReadMiss = nil })
 ```
 
-`test.Setenv` sets an environment variable for the duration of the test and automatically restores the original value via `test.Cleanup`:
+`httptest.NewRequest` + `httptest.NewRecorder` let you test HTTP handlers without a real server or open port:
 
 ```go
-// internal/config/config_test.go
-test.Setenv("GEMINI_API_KEY", "test-key")
-// restored automatically when the test ends
+req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+rec := httptest.NewRecorder()
+handler.ServeHTTP(rec, req)
+if rec.Code != http.StatusOK { ... }
 ```
 
-The race detector is enabled with `-race`:
+---
 
-```go
-// Makefile
-go test -coverprofile=coverage.out -race ./... -v
+## 20. Build Tags and Flags
+
+The `Dockerfile` builds with:
+
+```
+CGO_ENABLED=0 go build -trimpath -ldflags="-X main.version=$(git rev-parse --short HEAD)" ./cmd/mcp-banana/
 ```
 
-## 16. Go Glossary
+- `CGO_ENABLED=0` — disables C bindings so the binary is fully static and runs in the distroless image (no glibc).
+- `-trimpath` — strips absolute source paths from the binary, preventing local paths from leaking in stack traces.
+- `-ldflags="-X main.version=..."` — sets the `version` package-level variable at link time without modifying source code.
 
-| Abbreviation | Meaning | Explanation |
-|---|---|---|
-| `err` | error | Holds the error returned by the previous operation. In Go, functions return errors as values, not exceptions, so error handling is explicit. |
-| `ctx` | context | Carries request-scoped deadlines, cancellation signals, and metadata across API boundaries. Essential for managing timeouts and coordinating shutdown. |
-| `req` | request | The incoming tool call or HTTP request. Contains arguments, headers, and body. |
-| `resp` | response | The HTTP or API response received from an upstream service. Contains status code, headers, and body. |
-| `cfg` | config | The parsed application configuration loaded from environment variables at startup. |
-| `srv` | server | The HTTP server instance or MCP server. In this project: `*http.Server` or `*mcpserver.MCPServer`. |
-| `test` | test | The Go test runner (`*testing.T`) that provides logging and failure reporting. Used in all unit tests. |
+---
+
+## 21. Go Glossary
+
+Standard Go abbreviations used throughout this codebase:
+
+| Abbreviation | Meaning                          | Example                          |
+|--------------|----------------------------------|----------------------------------|
+| `err`        | error value                      | `if err != nil`                  |
+| `ctx`        | `context.Context`                | `ctx context.Context`            |
+| `req`        | request (HTTP or MCP)            | `req mcp.CallToolRequest`        |
+| `resp`       | response                         | `resp, err := client.Generate()` |
+| `cfg`        | config/configuration struct      | `cfg *config.Config`             |
+| `srv`        | server                           | `srv := mcpserver.NewMCPServer()`|
+| `test`       | `*testing.T` in test functions   | `func TestFoo(test *testing.T)`  |
+
+All other names use full words: `requestContext` not `reqCtx`; `clientError` not `err` when multiple errors are in scope; `goroutineIndex` not `i`.

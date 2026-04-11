@@ -4,39 +4,35 @@
 
 mcp-banana integrates with Claude Code as an MCP server. Claude Code communicates with the server using the Model Context Protocol over either a local stdio transport or a remote HTTP transport.
 
-## Team Adoption
-
 | Scope | Use Case | Storage |
 |---|---|---|
 | **User scope** (`--scope user`) | Personal local development; developer-specific credentials | `~/.claude.json` (not committed) |
 | **Project scope** (`--scope project`) | Shared team configuration with no secrets | `.mcp.json` (committed to repository) |
-| **HTTP** | Preferred transport for remote/shared server | Direct HTTP or SSH-tunneled HTTP |
-| **SSE** | Deprecated | Do not use |
 
 The repository includes a `.mcp.json` with a project-scoped stdio configuration. Each developer supplies their own `GEMINI_API_KEY` via user-scoped config or environment variable.
 
-## Option A: Local Stdio Mode (Recommended for Development)
+---
 
-Stdio mode runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
+## Option A: Local stdio
 
-**Prerequisites:** Build the binary (`make build`), obtain a Gemini API key, and verify model IDs in `internal/gemini/registry.go` (see [models.md](models.md)).
+Runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
 
-### User-Scoped Setup (Secrets Stored Locally)
+**Prerequisites:** Build the binary first with `./scripts/run-local.sh` (or `make build`).
+
+**User-scoped setup (secrets stored locally):**
 
 ```bash
 claude mcp add-json --scope user banana '{
-  "command": "/usr/local/bin/mcp-banana",
+  "command": "./mcp-banana",
   "args": ["--transport", "stdio"],
-  "env": {
-    "GEMINI_API_KEY": "<your-gemini-api-key>"
-  },
+  "env": {"GEMINI_API_KEY": "<your-key>"},
   "type": "stdio"
 }'
 ```
 
-Replace `/usr/local/bin/mcp-banana` with the actual path to your built binary. The `env` block is stored only in `~/.claude.json` and is not visible to other team members.
+Replace `./mcp-banana` with the absolute path to your built binary if you call this from a different directory (e.g., `/usr/local/bin/mcp-banana`). The `env` block is stored only in `~/.claude.json`.
 
-### Project-Scoped Setup (No Secrets, Committed to Repo)
+**Project-scoped setup (no secrets, committed to repo):**
 
 ```bash
 claude mcp add-json --scope project banana '{
@@ -46,56 +42,140 @@ claude mcp add-json --scope project banana '{
 }'
 ```
 
-This configuration is saved to `.mcp.json` and is already committed in this repository. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on `PATH`.
+This is saved to `.mcp.json`. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on PATH.
 
-## Option B: Remote HTTP Mode (For a Deployed Server)
+---
 
-HTTP mode connects Claude Code to a running mcp-banana server over the network. Every request requires a bearer token in the `Authorization` header.
+## Option B: Docker Dev (HTTP)
 
-For auth setup details (SSH tunnel, single token, or per-user tokens), see [authentication.md](authentication.md).
-
-### Basic HTTP Connection
+Connect Claude Code to the server running in Docker on localhost. The server must be started first with `./scripts/run-docker-dev.sh`.
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://<server-ip>:8847/mcp",
+  "url": "http://127.0.0.1:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>"
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-### SSH Tunnel (Recommended for Production)
+Replace `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from `.env`. The `X-Gemini-API-Key` header is optional — when omitted, the server uses its default `GEMINI_API_KEY`.
 
-The server binds to `127.0.0.1:8847` inside Docker (not publicly exposed). Set up an SSH tunnel first (see [authentication.md - Option 1: SSH Tunnel](authentication.md) for full instructions including autossh and SSH config), then connect using `localhost`:
+**SSH tunnel setup:** When using an SSH tunnel instead of a bearer token, keep the URL as `http://localhost:8847/mcp` and omit the `Authorization` header:
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
-  "url": "http://localhost:8847/mcp",
+  "url": "http://localhost:8847/mcp"
+}'
+```
+
+See [Authentication — Option 1](authentication.md#option-1-no-auth-ssh-tunnel) for SSH tunnel setup.
+
+---
+
+## Option C: Docker Prod (HTTPS)
+
+Connect Claude Code to a production server with HTTPS. The server must be running with TLS configured (see [Setup and Operations — Mode 3](setup-and-operations.md#mode-3--docker-prod-https-public)).
+
+```bash
+claude mcp add-json --scope user banana '{
+  "type": "http",
+  "url": "https://mcp.yourdomain.com:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>"
+    "Authorization": "Bearer <your-mcp-auth-token>",
+    "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
+
+Replace `mcp.yourdomain.com` with your actual domain, `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from the server's `.env`, and `<your-gemini-api-key>` with your key from [aistudio.google.com](https://aistudio.google.com/).
+
+Both headers are required in this configuration:
+
+- `Authorization` — authenticates the client with the server
+- `X-Gemini-API-Key` — provides your personal Gemini API key (so Gemini charges you, not the server operator)
+
+---
+
+## Option D: Claude Desktop (via `mcp-remote`)
+
+Connect Claude Desktop to a remote mcp-banana server using `mcp-remote` as a stdio-to-HTTP bridge. This is the recommended approach because Claude Desktop Connectors route through Anthropic's cloud infrastructure, which may not reach non-standard ports like 8847.
+
+`mcp-remote` connects directly from your machine, handles OAuth authentication automatically, and opens a browser for the sign-in flow on first use.
+
+**Prerequisites:**
+
+- Node.js and `npx` installed (`which npx` to verify)
+- OAuth configured on the server — see [Authentication — Option 3](authentication.md#option-3-oauth-21-claude-desktop) for provider setup
+- TLS enabled on the server (HTTPS is required for OAuth)
+- The server is running and reachable at `https://mcp.yourdomain.com:8847`
+
+**Steps:**
+
+1. Open your Claude Desktop config file:
+
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+2. Add the `mcpServers` block (merge with existing config if the file already has content):
+
+   ```json
+   {
+     "mcpServers": {
+       "banana": {
+         "command": "npx",
+         "args": ["mcp-remote", "https://mcp.yourdomain.com:8847/mcp"]
+       }
+     }
+   }
+   ```
+
+   Replace `mcp.yourdomain.com` with your actual domain.
+
+3. Fully quit Claude Desktop (Quit from the menu bar, not just close the window).
+
+4. Reopen Claude Desktop. On the first connection, `mcp-remote` will:
+   - Discover the OAuth endpoints via `/.well-known/oauth-protected-resource`
+   - Register a client dynamically via `/register`
+   - Open your browser to sign in with Google, GitHub, or Apple
+   - Store the OAuth tokens locally for future sessions
+
+5. After sign-in, the `banana` tools (generate_image, edit_image, list_models, recommend_model) will appear in Claude Desktop.
+
+**Token refresh:** `mcp-remote` handles token refresh automatically. Access tokens expire after 1 hour; refresh tokens after 30 days. If your refresh token expires, `mcp-remote` will re-open the browser for sign-in.
+
+**Sending your own Gemini API key:** Unlike Claude Code, Claude Desktop does not support custom HTTP headers in `mcp-remote` config. If the server has no `GEMINI_API_KEY` configured, ask the server operator to set one, or use Claude Code with Option B or C instead.
+
+---
 
 ## Verification
 
-After adding the server:
+After adding the server with any option above:
 
 ```bash
 claude mcp list
 claude mcp get banana
 ```
 
-Both commands should show the `banana` server entry. If configured correctly and model IDs are verified, Claude Code will be able to call all four tools.
+Both commands should show the `banana` server entry. If configured correctly, Claude Code will be able to call all four tools.
+
+**Example prompts to test:**
+
+- `List the available image generation models` — calls `list_models`
+- `What model do you recommend for a quick draft?` — calls `recommend_model`
+- `Generate an image of a sunset over the ocean` — calls `generate_image`
+- `Edit this image to make the sky more dramatic` — calls `edit_image` with a provided image
+
+---
 
 ## Scope Conflicts
 
-Claude Code resolves MCP servers by name. If the same server name (e.g. `banana`) exists in both project scope (`.mcp.json`) and user scope (`~/.claude.json`), the project-scoped entry takes precedence. This means `claude mcp get banana` and `claude mcp list` may show different results — `list` checks connectivity across all scopes, while `get` returns the highest-priority match.
+Claude Code resolves MCP servers by name. If the same server name (e.g. `banana`) exists in both project scope (`.mcp.json`) and user scope (`~/.claude.json`), the project-scoped entry takes precedence.
 
-**Common scenario:** You add an HTTP config with `--scope user`, but the repo already has a stdio config in `.mcp.json`. `claude mcp list` shows the HTTP entry as connected, but `claude mcp get banana` shows the project-scoped stdio entry (which may be failing).
+**Common scenario:** You add an HTTP config with `--scope user`, but the repo already has a stdio config in `.mcp.json`. `claude mcp list` shows the HTTP entry as connected, but `claude mcp get banana` shows the project-scoped stdio entry.
 
 **Fix:** Remove the entry from the scope you do not want:
 
@@ -109,26 +189,8 @@ claude mcp remove banana --scope user
 
 After removing the conflicting entry, verify with `claude mcp get banana`.
 
+---
+
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
-|---|---|---|
-| `claude mcp list` does not show `banana` | Server was not added | Re-run `claude mcp add-json` with the correct `--scope` |
-| `GEMINI_API_KEY is required` error on startup | API key not set | Add the `env` block to your user-scoped config or set the variable in your shell |
-| `registry validation failed: model "..." has unverified GeminiID` | Sentinel model IDs still present | Follow the verification procedure in [models.md](models.md) |
-| HTTP 401 Unauthorized | Wrong or missing auth token | Verify the token in your Claude Code config matches the server |
-| `Connection refused` on HTTP mode | SSH tunnel not running or server is down | Start the tunnel or check the server with `curl http://localhost:8847/healthz` |
-| Server starts but tools return errors | Gemini API issue or quota exceeded | Check `docker compose logs -f mcp-banana` on the remote server |
-| Binary not found | `mcp-banana` not on PATH | Use the full absolute path in `command`, or copy the binary to `/usr/local/bin/` |
-| `claude mcp get banana` shows wrong config (e.g. stdio instead of HTTP) | Duplicate `banana` entries in different scopes — project-scoped `.mcp.json` shadows user-scoped `~/.claude.json` | Remove the conflicting scope: `claude mcp remove banana --scope project` or `claude mcp remove banana --scope user` |
-
-See [troubleshooting.md](troubleshooting.md) for additional common issues and debugging steps.
-
-## Verifying Tool Access
-
-Once integrated, you can ask Claude Code to call the tools directly:
-
-- "List the available image generation models" (calls `list_models`)
-- "What model do you recommend for a quick draft?" (calls `recommend_model`)
-- "Generate an image of a sunset over the ocean" (calls `generate_image`)
-- "Edit this image to make the sky more dramatic" (calls `edit_image` with a provided image)
+See [Troubleshooting](troubleshooting.md) for common problems including connection failures, auth errors, and binary not found errors.

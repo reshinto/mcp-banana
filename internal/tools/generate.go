@@ -17,9 +17,27 @@ const defaultModel = "nano-banana-2"
 
 // NewGenerateImageHandler returns an MCP tool handler for the generate_image tool.
 // It validates all inputs via the security package before forwarding to the Gemini service.
-// The handler never returns a Go error; application errors are encoded in CallToolResult.
-func NewGenerateImageHandler(service gemini.GeminiService, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// When clientCache is non-nil and the request context contains a per-request API key
+// (set by middleware from the X-Gemini-API-Key header), that client is used instead of
+// the default service. The handler never returns a Go error; application errors are
+// encoded in CallToolResult.
+func NewGenerateImageHandler(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(requestContext context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		resolvedService := service
+		if clientCache != nil {
+			perRequestKey := gemini.APIKeyFromContext(requestContext)
+			if perRequestKey != "" {
+				perRequestClient, clientError := clientCache.GetClient(requestContext, perRequestKey)
+				if clientError != nil {
+					return mcp.NewToolResultError("failed to initialize client for provided API key"), nil
+				}
+				resolvedService = perRequestClient
+			}
+		}
+		if resolvedService == nil {
+			return mcp.NewToolResultError("no API key configured: set GEMINI_API_KEY on the server or send X-Gemini-API-Key header"), nil
+		}
+
 		prompt := req.GetString("prompt", "")
 		modelAlias := req.GetString("model", defaultModel)
 		aspectRatio := req.GetString("aspect_ratio", "")
@@ -34,7 +52,7 @@ func NewGenerateImageHandler(service gemini.GeminiService, maxImageBytes int) fu
 			return mcp.NewToolResultError(fmt.Sprintf("invalid_aspect_ratio: %s", err.Error())), nil
 		}
 
-		result, err := service.GenerateImage(requestContext, modelAlias, prompt, gemini.GenerateOptions{
+		result, err := resolvedService.GenerateImage(requestContext, modelAlias, prompt, gemini.GenerateOptions{
 			AspectRatio: aspectRatio,
 		})
 		if err != nil {

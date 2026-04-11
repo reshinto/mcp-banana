@@ -1,13 +1,13 @@
 graph LR
-    subgraph "Trust Zone: Claude Code"
-        CC[Claude Code]
+    subgraph "Trust Zone: Client"
+        CC[Claude Code / Claude Desktop]
     end
 
     subgraph "Trust Zone: MCP Server"
         direction TB
-        VAL[Input Validation<br/>validate.go]
-        SAN[Output Sanitization<br/>sanitize.go]
-        ERR[Error Mapping<br/>errors.go]
+        VAL[Input Validation<br/>prompts, models, images, aspect ratios]
+        SAN[Output Sanitization<br/>secret redaction, log injection prevention]
+        ERR[Error Mapping<br/>SDK errors → safe codes]
         REG[Model Registry<br/>SafeModelInfo only]
     end
 

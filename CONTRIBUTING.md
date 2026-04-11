@@ -16,28 +16,92 @@ See [Setup and Operations](docs/setup-and-operations.md) for prerequisites and l
 | `make vet` | Run `go vet ./...` static analysis |
 | `make run-stdio` | Build and run in stdio mode |
 | `make run-http` | Build and run in HTTP mode on `0.0.0.0:8847` |
-| `make quality-gate` | Run the full CI sequence: lint, fmt-check, vet, test |
+| `make quality-gate` | Run the full CI sequence: lint → fmt-check → vet → test |
 | `make rotate-token` | Generate a new auth token and print rotation instructions |
 | `make clean` | Remove the binary and coverage.out |
+
+## Branch Workflow
+
+Every task starts on a new branch from `main`. This is mandatory.
+
+```bash
+git checkout main && git pull
+git checkout -b feat/short-description   # or fix/ or chore/
+```
+
+Branch naming: `feat/<description>`, `fix/<description>`, `chore/<description>`. Never commit directly to `main`.
+
+Do not reuse an existing feature branch for a different task. Check existing branches with `git branch -a` before creating a new one.
+
+## Quality Gate
+
+Run this before every `git add` / `git commit`:
+
+```bash
+make quality-gate
+```
+
+This runs lint, format check, vet, and tests in order. All steps must pass. Do not skip any step or use `--no-verify`.
+
+## Pull Request Process
+
+1. Push your branch: `git push -u origin feat/your-branch`
+2. Open a PR targeting `main` — do not leave pushed branches without a PR
+3. PR title: under 70 characters, imperative mood ("Add image editing support", not "Added...")
+4. PR body: summary bullet points and a test plan checklist
+5. Ensure all CI checks pass before requesting review
+
+Every feature or bug fix needs tests. See [docs/testing.md](docs/testing.md) for patterns and the 80% coverage threshold.
 
 ## Coding Standards
 
 ### Naming
 
-- No single-character variable names. Use `elementIndex` instead of `i`, `currentNode` instead of `n`.
-- No variable names composed of combined single characters (`ij`, `xy`).
-- Use meaningful names in tests and for temporary variables as well.
-- Common abbreviations are acceptable when their meaning is clear and consistent (see [Go Glossary](docs/go-guide.md#16-go-glossary)).
+No single-character variable names. Use full, descriptive names everywhere — in tests, temporary variables, and loop iterators:
+
+```go
+// correct
+for elementIndex, item := range items { ... }
+
+// wrong — banned by coding standards
+for i, v := range items { ... }
+```
+
+Allowed standard Go abbreviations (do not expand these):
+
+| Abbreviation | Meaning |
+|---|---|
+| `err` | error value |
+| `ctx` | context.Context |
+| `req` | request |
+| `resp` | response |
+| `cfg` | config/configuration struct |
+| `srv` | server |
+| `test` | `*testing.T` parameter in test functions |
+
+All other abbreviations must use full words. Examples of banned forms: `mw`, `msg`, `sig`, `idx`, `num`, `val`, `buf`, `tmp`, `fn`, `cb`, `ch`, `opts`, `addr`.
+
+Use context-specific error names when multiple errors are in scope: `loadError`, `validationError`, `parseError`.
+
+### Test Parameter Convention
+
+Test functions use `test *testing.T`, not `t *testing.T`:
+
+```go
+func TestSomething(test *testing.T) {
+    // ...
+}
+```
 
 ### Imports
 
-Group imports with a blank line between groups:
+Group imports with a blank line between each group:
 
 1. Standard library
 2. Third-party packages
 3. Internal packages (`github.com/reshinto/mcp-banana/internal/...`)
 
-When two packages have the same base name, use an import alias:
+When two packages share the same base name, use an import alias:
 
 ```go
 import (
@@ -48,56 +112,65 @@ import (
 
 ### File Length
 
-Keep source files focused. Files should generally stay under 500 lines. If a file is growing larger, consider splitting it by responsibility.
+Keep source files focused and under 500 lines. If a file grows beyond this, split it by responsibility.
 
 ### Error Handling
 
-Always check errors. The `errcheck` linter will flag unchecked error returns. Return errors to the caller rather than logging and continuing, unless the error is truly non-fatal and the decision to continue is explicit.
+Always check errors. The `errcheck` linter will flag unchecked error returns.
 
-Use `fmt.Errorf("context: %w", err)` to wrap errors with context while preserving the original error for `errors.As`/`errors.Is` unwrapping.
+Use `fmt.Errorf("context: %w", err)` to wrap errors with context while preserving the original for `errors.As`/`errors.Is` unwrapping.
+
+### Comments
+
+Every exported function and type must have a Go doc comment. Security-critical code must include a `// SECURITY:` annotation explaining the invariant being enforced.
 
 ### Security Constraints
 
 - Never include secrets in log output, error messages, or tool responses. Register secrets with `security.RegisterSecret()` at startup.
 - Never expose `GeminiID` values to Claude Code. Use `SafeModelInfo` for all external responses.
-- Always validate user input through the `security` package before forwarding to the Gemini client.
-- Map all Gemini errors through `gemini.MapError()` -- never forward raw error text.
+- Always validate user input through the `internal/security/` package before forwarding to the Gemini client.
+- Map all Gemini errors through `gemini.MapError()` — never forward raw SDK error text.
 
-## Branch Workflow
+## Adding a New Feature
 
-Every task starts on a new branch:
+1. Identify which `internal/` package the feature belongs to.
+2. Implement the feature in that package (logic + types + `_test.go` co-located).
+3. If the feature introduces a new MCP tool, register it in `internal/tools/` and wire it in `internal/server/server.go`.
+4. If the feature uses a new model, add the model ID to `internal/gemini/registry.go` first.
+5. Update README and relevant docs in the same pass — do not defer doc updates.
 
-```bash
-git checkout main && git pull
-git checkout -b feat/short-description   # or fix/ or chore/
-```
+## CI Requirements
 
-Branch naming: `feat/<description>`, `fix/<description>`, `chore/<description>`. Never commit directly to `main`.
+The CI pipeline runs on feature branch pushes and PRs:
 
-## Quality Gate
+1. `golangci-lint run`
+2. `gofmt -w .`
+3. `go vet ./...`
+4. `go test -race -coverprofile=coverage.out ./...` with 80% line coverage enforcement
+5. Binary build: `go build ./cmd/mcp-banana/`
 
-Run this before every commit:
+All checks must pass before a PR can be merged.
 
-```bash
-make quality-gate
-```
+## OAuth Development Setup
 
-This runs lint, format check, vet, and tests in order. All steps must pass.
+OAuth requires real provider credentials for end-to-end testing. For local development that does not involve OAuth, use bearer token authentication or per-user API keys — both work without a domain, TLS certificate, or provider credentials.
 
-## Pull Request Process
+To test the OAuth flow locally:
 
-1. Push your branch: `git push -u origin feat/your-branch`
-2. Open a PR targeting `main`
-3. PR title: under 70 characters, imperative mood ("Add image editing support", not "Added...")
-4. Ensure all CI checks pass
-5. Request review
+1. Register a test application with **Google** or **GitHub** (both support `http://localhost` callbacks). See [docs/setup-and-operations.md](docs/setup-and-operations.md#local-oauth-testing) for step-by-step instructions.
+2. Set the redirect URI to `http://localhost:8847/callback`.
+3. Set `OAUTH_BASE_URL=http://localhost:8847` and the provider credentials in your local `.env`.
+4. Restart the server with `./scripts/run-docker-dev.sh` and open the authorize URL in a browser.
 
-Every feature or bug fix needs tests. See [docs/testing.md](docs/testing.md) for patterns and the coverage threshold.
+**Apple Sign-In cannot be tested locally.** Apple requires HTTPS with a registered domain and a JWT-based client secret generated from a private key. Test Apple only on the production server.
+
+Do not commit provider credentials. Keep them in your local `.env`, which is excluded by `.gitignore`.
 
 ## Further Reading
 
-- [docs/architecture.md](docs/architecture.md) - System design, package layout, data flow
-- [docs/testing.md](docs/testing.md) - Testing patterns, inventory, and coverage requirements
-- [docs/go-guide.md](docs/go-guide.md) - Go language concepts used in this project
-- [docs/security.md](docs/security.md) - Threat model and security controls
-- [docs/models.md](docs/models.md) - Model aliases and verification procedure
+- [docs/architecture.md](docs/architecture.md) — System design, package layout, security boundaries
+- [docs/testing.md](docs/testing.md) — Testing patterns, inventory, and coverage requirements
+- [docs/go-guide.md](docs/go-guide.md) — Go language concepts used in this project
+- [docs/security.md](docs/security.md) — Threat model and security controls
+- [docs/models.md](docs/models.md) — Model aliases and sentinel ID verification procedure
+- [docs/root-files.md](docs/root-files.md) — Description of every root-level file and directory

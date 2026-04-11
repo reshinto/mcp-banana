@@ -1,18 +1,22 @@
 graph TD
     MAIN["cmd/mcp-banana<br/>(main.go)"] --> CONFIG["internal/config<br/>Config, Load()"]
-    MAIN --> GEMINI["internal/gemini<br/>Client, Registry, Errors"]
+    MAIN --> GEMINI["internal/gemini<br/>Client, ClientCache, Registry"]
+    MAIN --> OAUTH["internal/oauth<br/>Providers, Store"]
     MAIN --> SECURITY_S["internal/security<br/>RegisterSecret()"]
     MAIN --> SERVER["internal/server<br/>NewMCPServer, NewHTTPHandler"]
 
     SERVER --> CONFIG
     SERVER --> GEMINI
+    SERVER --> OAUTH
+    SERVER --> SECURITY_V["internal/security<br/>Validate*(), Sanitize*()"]
     SERVER --> TOOLS["internal/tools<br/>Handler factories"]
 
     TOOLS --> GEMINI
-    TOOLS --> SECURITY_V["internal/security<br/>Validate*()"]
-    TOOLS --> POLICY["internal/policy<br/>Recommend()"]
+    TOOLS --> SECURITY_V
 
-    SECURITY_V --> GEMINI
+    GEMINI --> SECURITY_V
+
+    POLICY["internal/policy<br/>Recommend()"] --> GEMINI
 
     SERVER -.->|middleware| RATE["golang.org/x/time/rate"]
     GEMINI -.->|SDK| GENAI["google.golang.org/genai"]
@@ -22,3 +26,4 @@ graph TD
     style GEMINI fill:#dfd,stroke:#333
     style SECURITY_V fill:#f9d,stroke:#333
     style SECURITY_S fill:#f9d,stroke:#333
+    style OAUTH fill:#ddf,stroke:#333

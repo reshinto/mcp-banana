@@ -12,10 +12,27 @@ import (
 
 // NewEditImageHandler returns an MCP tool handler for the edit_image tool.
 // It validates the instructions, model alias, and image data before forwarding
-// to the Gemini service. The handler never returns a Go error; application errors
-// are encoded in CallToolResult.
-func NewEditImageHandler(service gemini.GeminiService, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// to the Gemini service. When clientCache is non-nil and the request context
+// contains a per-request API key (set by middleware from the X-Gemini-API-Key
+// header), that client is used instead of the default service. The handler never
+// returns a Go error; application errors are encoded in CallToolResult.
+func NewEditImageHandler(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(requestContext context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		resolvedService := service
+		if clientCache != nil {
+			perRequestKey := gemini.APIKeyFromContext(requestContext)
+			if perRequestKey != "" {
+				perRequestClient, clientError := clientCache.GetClient(requestContext, perRequestKey)
+				if clientError != nil {
+					return mcp.NewToolResultError("failed to initialize client for provided API key"), nil
+				}
+				resolvedService = perRequestClient
+			}
+		}
+		if resolvedService == nil {
+			return mcp.NewToolResultError("no API key configured: set GEMINI_API_KEY on the server or send X-Gemini-API-Key header"), nil
+		}
+
 		instructions := req.GetString("instructions", "")
 		modelAlias := req.GetString("model", defaultModel)
 		imageBase64 := req.GetString("image", "")
@@ -33,7 +50,7 @@ func NewEditImageHandler(service gemini.GeminiService, maxImageBytes int) func(c
 			return mcp.NewToolResultError(fmt.Sprintf("invalid_image: %s", err.Error())), nil
 		}
 
-		result, err := service.EditImage(requestContext, modelAlias, imageBytes, mimeType, instructions)
+		result, err := resolvedService.EditImage(requestContext, modelAlias, imageBytes, mimeType, instructions)
 		if err != nil {
 			code, message := gemini.MapError(err)
 			return mcp.NewToolResultError(fmt.Sprintf("%s: %s", code, message)), nil

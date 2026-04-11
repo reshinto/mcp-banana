@@ -31,12 +31,15 @@ func TestLoad_ValidConfig(test *testing.T) {
 	}
 }
 
-func TestLoad_MissingAPIKey(test *testing.T) {
+func TestLoad_EmptyAPIKey_Succeeds(test *testing.T) {
 	test.Setenv("GEMINI_API_KEY", "")
 
-	_, loadError := config.Load()
-	if loadError == nil {
-		test.Fatal("expected error for missing API key")
+	serverConfig, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("expected no error for empty API key (per-user keys supported), got: %v", loadError)
+	}
+	if serverConfig.GeminiAPIKey != "" {
+		test.Errorf("expected empty GeminiAPIKey, got: %s", serverConfig.GeminiAPIKey)
 	}
 }
 
@@ -221,6 +224,49 @@ func TestLoad_MalformedProConcurrency(test *testing.T) {
 	_, loadError := config.Load()
 	if loadError == nil {
 		test.Fatal("expected error for malformed pro concurrency")
+	}
+}
+
+func TestLoad_OAuthConfigFields(test *testing.T) {
+	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForOAuthConfigTest12345678901")
+	test.Setenv("OAUTH_GOOGLE_CLIENT_ID", "google-id")
+	test.Setenv("OAUTH_GOOGLE_CLIENT_SECRET", "google-secret")
+	test.Setenv("OAUTH_BASE_URL", "https://banana.example.com:8847")
+
+	cfg, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("unexpected error: %v", loadError)
+	}
+	if cfg.OAuthGoogleClientID != "google-id" {
+		test.Errorf("expected OAuthGoogleClientID 'google-id', got '%s'", cfg.OAuthGoogleClientID)
+	}
+	if cfg.OAuthBaseURL != "https://banana.example.com:8847" {
+		test.Errorf("expected OAuthBaseURL, got '%s'", cfg.OAuthBaseURL)
+	}
+}
+
+func TestLoad_TLSConfigFields(test *testing.T) {
+	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForTLSConfigTest123456789012")
+	test.Setenv("MCP_TLS_CERT_FILE", "/certs/cert.pem")
+	test.Setenv("MCP_TLS_KEY_FILE", "/certs/key.pem")
+
+	cfg, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("unexpected error: %v", loadError)
+	}
+	if cfg.TLSCertFile != "/certs/cert.pem" {
+		test.Errorf("expected TLSCertFile '/certs/cert.pem', got '%s'", cfg.TLSCertFile)
+	}
+}
+
+func TestLoad_TLSPartialConfig_ReturnsError(test *testing.T) {
+	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForTLSPartialTest12345678901")
+	test.Setenv("MCP_TLS_CERT_FILE", "/certs/cert.pem")
+	// MCP_TLS_KEY_FILE intentionally missing
+
+	_, loadError := config.Load()
+	if loadError == nil {
+		test.Errorf("expected error when only one TLS file is set")
 	}
 }
 

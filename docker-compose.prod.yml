@@ -1,0 +1,4 @@
+services:
+  mcp-banana:
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
