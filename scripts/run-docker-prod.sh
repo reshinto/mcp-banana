@@ -109,12 +109,15 @@ if [ "$UPDATED_ENV" = true ]; then
   set +a
 fi
 
-# Create credentials.json if it doesn't exist (mounted as a Docker volume)
+# Create credentials.json if it doesn't exist (mounted as a Docker volume).
+# The container runs as nonroot (uid 65532), so the file must be owned by
+# that uid for read/write access inside the container.
 if [ ! -f credentials.json ]; then
   echo "{}" > credentials.json
-  chmod 600 credentials.json
   echo "[note] Created credentials.json"
 fi
+sudo chown 65532:65532 credentials.json
+chmod 600 credentials.json
 
 # --- Step 5: Check and generate TLS certificates ---
 # Note: /etc/letsencrypt is owned by root (mode 700), so all checks use sudo.

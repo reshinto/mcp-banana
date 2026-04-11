@@ -36,12 +36,18 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Create credentials.json if it doesn't exist (mounted as a Docker volume)
+# Create credentials.json if it doesn't exist (mounted as a Docker volume).
+# The container runs as nonroot (uid 65532), so the file must be owned by
+# that uid for read/write access inside the container.
 if [ ! -f credentials.json ]; then
   echo "{}" > credentials.json
-  chmod 600 credentials.json
   echo "Created credentials.json"
 fi
+# Ensure correct ownership for container access (may require sudo on Linux).
+if [ "$(uname)" = "Linux" ]; then
+  sudo chown 65532:65532 credentials.json 2>/dev/null || true
+fi
+chmod 600 credentials.json
 
 # Stop any existing container to free port 8847
 ${COMPOSE_CMD} down 2>/dev/null || true
