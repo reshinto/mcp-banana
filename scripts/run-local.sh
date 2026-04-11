@@ -4,10 +4,9 @@
 #
 # Prerequisites:
 #   - Go 1.25+ installed
-#   - GEMINI_API_KEY set in .env or exported in shell (optional if clients
-#     provide their own key via X-Gemini-API-Key header)
 #
 # This script loads .env, builds the binary, and starts in stdio mode.
+# A credentials.json file is auto-created in the project root on first run.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,10 +17,6 @@ if [ -f .env ]; then
   # shellcheck disable=SC1091
   source .env
   set +a
-fi
-
-if [ -z "${GEMINI_API_KEY:-}" ]; then
-  echo "NOTE: GEMINI_API_KEY is not set. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
 echo "Building mcp-banana..."

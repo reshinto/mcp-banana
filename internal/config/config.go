@@ -46,6 +46,9 @@ type Config struct {
 // not when the first request arrives.
 func Load() (*Config, error) {
 	credentialsFile := os.Getenv("MCP_CREDENTIALS_FILE")
+	if credentialsFile == "" {
+		credentialsFile = "credentials.json"
+	}
 
 	logLevel := strings.ToLower(os.Getenv("MCP_LOG_LEVEL"))
 	if logLevel == "" {

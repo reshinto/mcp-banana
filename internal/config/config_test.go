@@ -40,13 +40,13 @@ func TestLoad_CredentialsFilePopulated(test *testing.T) {
 	}
 }
 
-func TestLoad_EmptyCredentialsFile_Succeeds(test *testing.T) {
+func TestLoad_DefaultCredentialsFile(test *testing.T) {
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
-		test.Fatalf("expected no error for empty credentials file, got: %v", loadError)
+		test.Fatalf("unexpected error: %v", loadError)
 	}
-	if serverConfig.CredentialsFile != "" {
-		test.Errorf("expected empty CredentialsFile, got: %s", serverConfig.CredentialsFile)
+	if serverConfig.CredentialsFile != "credentials.json" {
+		test.Errorf("expected default CredentialsFile 'credentials.json', got: %s", serverConfig.CredentialsFile)
 	}
 }
 

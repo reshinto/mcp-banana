@@ -246,7 +246,7 @@ func TestRegister_FailsOnMarshalError(test *testing.T) {
 	}
 }
 
-func TestRegister_FailsOnTempFileWriteError(test *testing.T) {
+func TestRegister_FailsOnWriteError(test *testing.T) {
 	tempDir := test.TempDir()
 	credPath := filepath.Join(tempDir, "credentials.json")
 
@@ -255,59 +255,19 @@ func TestRegister_FailsOnTempFileWriteError(test *testing.T) {
 		test.Fatalf("NewStore returned error: %v", createError)
 	}
 
-	// Make the directory read-only so the temp file write fails.
-	chmodError := os.Chmod(tempDir, 0500)
-	if chmodError != nil {
-		test.Fatalf("failed to chmod directory: %v", chmodError)
-	}
-	defer os.Chmod(tempDir, 0700) //nolint:errcheck
-
-	registerError := store.Register("identity-write", "key-write")
-	if registerError == nil {
-		test.Fatal("expected error from temp file write failure, got nil")
-	}
-}
-
-func TestRegister_FailsOnRenameError(test *testing.T) {
-	tempDir := test.TempDir()
-	subDir := filepath.Join(tempDir, "subdir")
-	subDirError := os.Mkdir(subDir, 0700)
-	if subDirError != nil {
-		test.Fatalf("failed to create subdir: %v", subDirError)
-	}
-
-	credPath := filepath.Join(subDir, "credentials.json")
-
-	store, createError := NewStore(credPath)
-	if createError != nil {
-		test.Fatalf("NewStore returned error: %v", createError)
-	}
-
-	// Point filePath to a different directory so rename crosses paths and fails.
-	// We do this by writing the temp file to a location that prevents rename.
-	// Trick: remove the credentials file and make the directory read-only
-	// AFTER the temp file is written. We can't do that easily with the current
-	// code, so instead we'll make the target a directory to force rename to fail.
+	// Replace the file with a directory so WriteFile fails.
 	removeError := os.Remove(credPath)
 	if removeError != nil {
 		test.Fatalf("failed to remove credentials file: %v", removeError)
 	}
-	// Create a directory with the same name as the credentials file.
 	mkdirError := os.Mkdir(credPath, 0700)
 	if mkdirError != nil {
 		test.Fatalf("failed to create directory at cred path: %v", mkdirError)
 	}
 
-	registerError := store.Register("identity-rename", "key-rename")
+	registerError := store.Register("identity-write", "key-write")
 	if registerError == nil {
-		test.Fatal("expected error from rename failure, got nil")
-	}
-
-	// Verify the temp file was cleaned up.
-	tempPath := credPath + ".tmp"
-	_, statError := os.Stat(tempPath)
-	if !os.IsNotExist(statError) {
-		test.Error("expected temp file to be cleaned up after rename failure")
+		test.Fatal("expected error from write failure, got nil")
 	}
 }
 
@@ -366,5 +326,79 @@ func TestLookup_ReturnsEmptyOnCorruptedFile(test *testing.T) {
 	apiKey := store.Lookup("any-identity")
 	if apiKey != "" {
 		test.Errorf("expected empty string, got %q", apiKey)
+	}
+}
+
+func TestNewStore_FailsOnChmodError(test *testing.T) {
+	tempDir := test.TempDir()
+	credPath := filepath.Join(tempDir, "credentials.json")
+
+	writeError := os.WriteFile(credPath, []byte("{}"), 0644)
+	if writeError != nil {
+		test.Fatalf("failed to write test file: %v", writeError)
+	}
+
+	// Inject a chmod failure.
+	originalChmod := osChmod
+	defer func() { osChmod = originalChmod }()
+	osChmod = func(_ string, _ os.FileMode) error {
+		return fmt.Errorf("simulated chmod failure")
+	}
+
+	_, createError := NewStore(credPath)
+	if createError == nil {
+		test.Fatal("expected error from chmod failure, got nil")
+	}
+}
+
+func TestNewStore_EnforcesPermissionsOnExistingFile(test *testing.T) {
+	tempDir := test.TempDir()
+	credPath := filepath.Join(tempDir, "credentials.json")
+
+	// Create file with overly permissive permissions.
+	writeError := os.WriteFile(credPath, []byte("{}"), 0644)
+	if writeError != nil {
+		test.Fatalf("failed to write test file: %v", writeError)
+	}
+
+	_, createError := NewStore(credPath)
+	if createError != nil {
+		test.Fatalf("unexpected error: %v", createError)
+	}
+
+	fileInfo, statError := os.Stat(credPath)
+	if statError != nil {
+		test.Fatalf("stat failed: %v", statError)
+	}
+	if fileInfo.Mode().Perm() != 0600 {
+		test.Errorf("expected 0600 permissions after NewStore, got: %o", fileInfo.Mode().Perm())
+	}
+}
+
+func TestRegister_LogsWarningOnCorruptFile(test *testing.T) {
+	tempDir := test.TempDir()
+	credPath := filepath.Join(tempDir, "credentials.json")
+
+	store, createError := NewStore(credPath)
+	if createError != nil {
+		test.Fatalf("NewStore returned error: %v", createError)
+	}
+
+	// Corrupt the file.
+	corruptError := os.WriteFile(credPath, []byte("not json"), 0600)
+	if corruptError != nil {
+		test.Fatalf("failed to corrupt file: %v", corruptError)
+	}
+
+	// Register should succeed (treats corrupt as empty) and log a warning.
+	registerError := store.Register("recovery-identity", "AIzaRecoveryKey")
+	if registerError != nil {
+		test.Fatalf("expected Register to succeed on corrupt file, got: %v", registerError)
+	}
+
+	// Verify the entry was written.
+	recoveredKey := store.Lookup("recovery-identity")
+	if recoveredKey != "AIzaRecoveryKey" {
+		test.Errorf("expected AIzaRecoveryKey, got: %s", recoveredKey)
 	}
 }

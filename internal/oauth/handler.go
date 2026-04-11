@@ -513,6 +513,7 @@ func NewGeminiKeySubmitHandler(store *Store, credStore CredentialsStore) http.Ha
 					writeJSONError(writer, "server_error", http.StatusInternalServerError)
 					return
 				}
+				session.ExpiresAt = time.Now().Add(10 * time.Minute)
 				store.StoreGeminiKeySession(newToken, session)
 				http.Redirect(writer, request, "/gemini-key?session="+newToken+"&returning=true&error=No+existing+key+found.+Please+provide+a+Gemini+API+key.", http.StatusFound)
 				return
@@ -531,6 +532,7 @@ func NewGeminiKeySubmitHandler(store *Store, credStore CredentialsStore) http.Ha
 			if credStore.Exists(session.ProviderIdentity) {
 				returningParam = "&returning=true"
 			}
+			session.ExpiresAt = time.Now().Add(10 * time.Minute)
 			store.StoreGeminiKeySession(newToken, session)
 			http.Redirect(writer, request, "/gemini-key?session="+newToken+returningParam+"&error=Gemini+API+key+must+not+be+empty", http.StatusFound)
 			return
@@ -548,6 +550,7 @@ func NewGeminiKeySubmitHandler(store *Store, credStore CredentialsStore) http.Ha
 			if credStore.Exists(session.ProviderIdentity) {
 				returningParam = "&returning=true"
 			}
+			session.ExpiresAt = time.Now().Add(10 * time.Minute)
 			store.StoreGeminiKeySession(newToken, session)
 			http.Redirect(writer, request, "/gemini-key?session="+newToken+returningParam+"&error=Invalid+Gemini+API+key", http.StatusFound)
 			return

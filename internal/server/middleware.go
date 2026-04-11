@@ -114,6 +114,9 @@ func (mw *middleware) authenticateRequest(request *http.Request) (string, bool) 
 	if hasCredentials {
 		geminiKey := mw.credStore.Lookup(requestToken)
 		if geminiKey != "" {
+			// SECURITY: Register both the bearer token and Gemini key with the
+			// sanitizer so neither appears in logs or error output.
+			security.RegisterSecret(requestToken)
 			security.RegisterSecret(geminiKey)
 			return geminiKey, true
 		}
@@ -123,6 +126,13 @@ func (mw *middleware) authenticateRequest(request *http.Request) (string, bool) 
 	geminiAPIKey := request.Header.Get("X-Gemini-API-Key")
 	geminiAPIKey = strings.TrimSpace(geminiAPIKey)
 	if geminiAPIKey != "" && hasCredentials {
+		// SECURITY: Require minimum token entropy to prevent trivial token guessing
+		// or accidental pre-registration of short/weak tokens.
+		const minTokenLength = 32
+		if len(requestToken) < minTokenLength {
+			mw.logger.Warn("self-registration rejected: bearer token too short", "length", len(requestToken))
+			return "", false
+		}
 		// SECURITY: Validate the key before registering to prevent storing invalid keys
 		validateError := credentials.ValidateGeminiKey(request.Context(), geminiAPIKey)
 		if validateError != nil {
@@ -134,6 +144,7 @@ func (mw *middleware) authenticateRequest(request *http.Request) (string, bool) 
 			mw.logger.Error("failed to register credentials", "error", registerError)
 			return "", false
 		}
+		security.RegisterSecret(requestToken)
 		security.RegisterSecret(geminiAPIKey)
 		return geminiAPIKey, true
 	}

@@ -6,6 +6,7 @@ package credentials
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 )
@@ -14,6 +15,10 @@ import (
 // It is a package-level variable so tests can inject failures for the marshal
 // error path that is otherwise unreachable with map[string]string values.
 var jsonMarshalIndent = json.MarshalIndent
+
+// osChmod is the function used to set file permissions. It is a package-level
+// variable so tests can inject failures for the chmod error path.
+var osChmod = os.Chmod
 
 // Store provides thread-safe access to a JSON credentials file that maps
 // client identities to Gemini API keys.
@@ -46,6 +51,14 @@ func NewStore(filePath string) (*Store, error) {
 		return nil, fmt.Errorf("credentials file contains invalid JSON: %w", parseError)
 	}
 
+	// SECURITY: Tighten permissions on pre-existing files. os.WriteFile only
+	// sets permissions on creation, not on existing files. An existing file
+	// with loose permissions (e.g. 0644) would expose all bearer tokens and
+	// Gemini API keys to other users on the system.
+	if chmodError := osChmod(filePath, 0600); chmodError != nil {
+		return nil, fmt.Errorf("failed to set credentials file permissions: %w", chmodError)
+	}
+
 	return store, nil
 }
 
@@ -70,9 +83,10 @@ func (store *Store) Lookup(identity string) string {
 	return entries[identity]
 }
 
-// Register adds or updates the Gemini API key for the given identity. The write
-// is atomic: data is written to a temporary file and then renamed over the
-// original to prevent corruption from partial writes.
+// Register adds or updates the Gemini API key for the given identity.
+// The mutex prevents concurrent writes from corrupting the file.
+// Writes directly to the file instead of temp+rename because Docker bind
+// mounts do not support atomic rename (rename returns "device or resource busy").
 func (store *Store) Register(identity string, geminiAPIKey string) error {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
@@ -81,7 +95,9 @@ func (store *Store) Register(identity string, geminiAPIKey string) error {
 	data, readError := os.ReadFile(store.filePath)
 	if readError == nil {
 		// A corrupt file is treated as empty to allow recovery via Register.
-		json.Unmarshal(data, &entries) //nolint:errcheck
+		if unmarshalError := json.Unmarshal(data, &entries); unmarshalError != nil {
+			slog.Warn("credentials file is corrupt, treating as empty", "error", unmarshalError)
+		}
 	}
 
 	entries[identity] = geminiAPIKey
@@ -92,14 +108,8 @@ func (store *Store) Register(identity string, geminiAPIKey string) error {
 	}
 
 	// SECURITY: credentials file must be readable only by the owner.
-	tempPath := store.filePath + ".tmp"
-	if writeError := os.WriteFile(tempPath, serialized, 0600); writeError != nil {
-		return fmt.Errorf("failed to write temp credentials file: %w", writeError)
-	}
-
-	if renameError := os.Rename(tempPath, store.filePath); renameError != nil {
-		os.Remove(tempPath) //nolint:errcheck
-		return fmt.Errorf("failed to rename credentials file: %w", renameError)
+	if writeError := os.WriteFile(store.filePath, serialized, 0600); writeError != nil {
+		return fmt.Errorf("failed to write credentials file: %w", writeError)
 	}
 
 	return nil

@@ -9,7 +9,7 @@
 #
 # Prerequisites:
 #   - Docker and Docker Compose installed
-#   - .env file (GEMINI_API_KEY optional if clients send X-Gemini-API-Key header)
+#   - .env file configured
 #
 # The server binds to 127.0.0.1:8847 (loopback only).
 # Access it from the same machine or via SSH tunnel.
@@ -36,8 +36,11 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
-  echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
+# Create credentials.json if it doesn't exist (mounted as a Docker volume)
+if [ ! -f credentials.json ]; then
+  echo "{}" > credentials.json
+  chmod 600 credentials.json
+  echo "Created credentials.json"
 fi
 
 # Stop any existing container to free port 8847

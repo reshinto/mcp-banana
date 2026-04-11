@@ -686,7 +686,7 @@ func TestMiddlewareSelfRegistrationSuccess(test *testing.T) {
 	wrappedHandler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(), captureHandler, nil, credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("Authorization", "Bearer abcdef0123456789abcdef0123456789ab")
 	req.Header.Set("X-Gemini-API-Key", "AIzaSelfRegKey")
 	rec := httptest.NewRecorder()
 
@@ -701,7 +701,7 @@ func TestMiddlewareSelfRegistrationSuccess(test *testing.T) {
 
 	// Verify the key was persisted — subsequent request with same bearer should work
 	req2 := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	req2.Header.Set("Authorization", "Bearer new-client-token")
+	req2.Header.Set("Authorization", "Bearer abcdef0123456789abcdef0123456789ab")
 	rec2 := httptest.NewRecorder()
 	wrappedHandler.ServeHTTP(rec2, req2)
 
@@ -723,7 +723,7 @@ func TestMiddlewareSelfRegistrationInvalidKey(test *testing.T) {
 		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("Authorization", "Bearer abcdef0123456789abcdef0123456789ab")
 	req.Header.Set("X-Gemini-API-Key", "AIzaBadKey")
 	rec := httptest.NewRecorder()
 
@@ -760,18 +760,18 @@ func TestMiddlewareSelfRegistrationRegisterFails(test *testing.T) {
 		test.Fatalf("failed to create store: %v", storeError)
 	}
 
-	// Make the directory read-only so that Register's temp file write fails.
-	chmodError := os.Chmod(readOnlyDir, 0555)
+	// Make the credentials file read-only so that Register's WriteFile fails.
+	chmodError := os.Chmod(credsPath, 0444)
 	if chmodError != nil {
-		test.Fatalf("failed to chmod dir: %v", chmodError)
+		test.Fatalf("failed to chmod file: %v", chmodError)
 	}
-	test.Cleanup(func() { os.Chmod(readOnlyDir, 0755) })
+	test.Cleanup(func() { _ = os.Chmod(credsPath, 0600) })
 
 	handler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(),
 		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
 
 	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
-	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("Authorization", "Bearer abcdef0123456789abcdef0123456789ab")
 	req.Header.Set("X-Gemini-API-Key", "AIzaValidKey")
 	rec := httptest.NewRecorder()
 
@@ -798,6 +798,30 @@ func TestMiddlewareSelfRegistrationNoCredStore(test *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		test.Fatalf("expected 401 when no credStore for self-registration, got %d", rec.Code)
+	}
+}
+
+func TestMiddlewareSelfRegistrationRejectsShortToken(test *testing.T) {
+	// Bearer tokens shorter than 32 characters should be rejected for self-registration.
+	restore := credentials.OverrideGeminiKeyValidator(func(_ context.Context, _ string) error {
+		return nil
+	})
+	defer restore()
+
+	credStore := createCredStore(test, map[string]string{})
+
+	handler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer short-token")
+	req.Header.Set("X-Gemini-API-Key", "AIzaSomeValidKey")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for short bearer token, got %d", rec.Code)
 	}
 }
 

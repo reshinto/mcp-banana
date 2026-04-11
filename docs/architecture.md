@@ -123,7 +123,7 @@ The server supports per-request Gemini API keys to allow multi-user deployments 
 2. The middleware extracts the key, registers it as a secret with the sanitizer, and stores it in the request context.
 3. The tool handler calls `gemini.APIKeyFromContext(ctx)` to retrieve the key.
 4. The handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user `*Client` or creates and caches a new one.
-5. If no per-request key is provided, the default server-level client (initialized from `GEMINI_API_KEY`) is used.
+5. If no per-request key is available, the request is rejected with an error.
 
 All per-user clients share the same `timeoutSecs` and `proConcurrency` settings from server config.
 

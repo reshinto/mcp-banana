@@ -102,10 +102,6 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 	}
 
-	if *transport == "http" && credStore == nil {
-		logger.Warn("HTTP mode: no MCP_CREDENTIALS_FILE configured -- auth is disabled, relying on network-level security (SSH tunnel)")
-	}
-
 	clientCache := gemini.NewClientCache(serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 
 	mcpServer := internalserver.NewMCPServer(clientCache, serverConfig.MaxImageBytes)

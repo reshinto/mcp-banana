@@ -473,61 +473,6 @@ func TestRun_HTTPModeStartsAndShutdown(test *testing.T) {
 	}
 }
 
-func TestRun_HTTPNoAuthWarning(test *testing.T) {
-	setupServerEnv(test)
-	test.Setenv("MCP_CREDENTIALS_FILE", "")
-
-	listener, listenError := net.Listen("tcp", "127.0.0.1:0")
-	if listenError != nil {
-		test.Fatalf("failed to create listener: %v", listenError)
-	}
-	listenerAddress := listener.Addr().String()
-	_ = listener.Close()
-
-	original := listenFunc
-	test.Cleanup(func() { listenFunc = original })
-	listenFunc = func(_, _ string) (net.Listener, error) {
-		return net.Listen("tcp", listenerAddress)
-	}
-
-	done := make(chan int, 1)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	go func() {
-		exitCode := run([]string{"--transport", "http", "--addr", listenerAddress}, &stdout, &stderr)
-		done <- exitCode
-	}()
-
-	// Wait for server to start.
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	healthURL := "http://" + listenerAddress + "/healthz"
-	for attempt := 0; attempt < 50; attempt++ {
-		resp, fetchError := httpClient.Get(healthURL)
-		if fetchError == nil {
-			_ = resp.Body.Close()
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Send SIGINT to shut down.
-	_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
-
-	select {
-	case exitCode := <-done:
-		if exitCode != 0 {
-			test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
-		}
-	case <-time.After(10 * time.Second):
-		test.Fatal("timed out waiting for server shutdown")
-	}
-
-	if !strings.Contains(stderr.String(), "auth is disabled") {
-		test.Errorf("expected auth warning in log output, got: %q", stderr.String())
-	}
-}
-
 func TestRun_HTTPShutdownError(test *testing.T) {
 	setupServerEnv(test)
 

@@ -65,13 +65,13 @@ type ProviderSession struct {
 // authorization codes, access tokens, refresh tokens, and provider sessions.
 // Auth codes, refresh tokens, and provider sessions are single-use and expire by TTL.
 type Store struct {
-	mutex              sync.RWMutex
-	clients            map[string]*Client
-	authCodes          map[string]*AuthCode
-	accessTokens       map[string]*TokenData
-	refreshTokens      map[string]*RefreshData
-	providerSessions   map[string]*ProviderSession
-	geminiKeySessions  map[string]*GeminiKeySession
+	mutex             sync.RWMutex
+	clients           map[string]*Client
+	authCodes         map[string]*AuthCode
+	accessTokens      map[string]*TokenData
+	refreshTokens     map[string]*RefreshData
+	providerSessions  map[string]*ProviderSession
+	geminiKeySessions map[string]*GeminiKeySession
 }
 
 // NewStore creates and initializes an empty OAuth store.

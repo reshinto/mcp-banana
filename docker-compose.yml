@@ -7,6 +7,8 @@ services:
       - "${MCP_BIND_ADDRESS:-127.0.0.1}:8847:8847"
     env_file:
       - .env
+    volumes:
+      - ./credentials.json:/data/credentials.json
     restart: unless-stopped
     stop_grace_period: 120s
     mem_limit: 768m
