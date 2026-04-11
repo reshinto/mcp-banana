@@ -114,8 +114,9 @@ if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
 fi
 
 # --- Step 5: Check and generate TLS certificates ---
+# Note: /etc/letsencrypt is owned by root (mode 700), so all checks use sudo.
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
-if [ ! -d "$CERT_DIR" ]; then
+if ! sudo test -d "$CERT_DIR"; then
   echo ""
   echo "TLS certificates not found at ${CERT_DIR}"
   echo ""
@@ -146,7 +147,7 @@ if [ ! -d "$CERT_DIR" ]; then
   sudo certbot certonly --manual --preferred-challenges dns -d "${DOMAIN}"
 
   # Verify certs were created
-  if [ ! -d "$CERT_DIR" ]; then
+  if ! sudo test -d "$CERT_DIR"; then
     echo "FAILED: Certificate generation failed. ${CERT_DIR} not found." >&2
     echo "  Fix the issue and re-run this script." >&2
     exit 1
@@ -160,11 +161,11 @@ fi
 # --- Step 6: Validate cert files exist ---
 FULLCHAIN="${CERT_DIR}/fullchain.pem"
 PRIVKEY="${CERT_DIR}/privkey.pem"
-if [ ! -f "$FULLCHAIN" ]; then
+if ! sudo test -f "$FULLCHAIN"; then
   echo "FAILED: ${FULLCHAIN} not found." >&2
   exit 1
 fi
-if [ ! -f "$PRIVKEY" ]; then
+if ! sudo test -f "$PRIVKEY"; then
   echo "FAILED: ${PRIVKEY} not found." >&2
   exit 1
 fi
