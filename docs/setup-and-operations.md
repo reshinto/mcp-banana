@@ -230,6 +230,8 @@ sudo ls /etc/letsencrypt/live/mcp.yourdomain.com/
 # Should show: cert.pem  chain.pem  fullchain.pem  privkey.pem  README
 ```
 
+> **Note:** `/etc/letsencrypt/` is owned by root with `700` permissions. You must use `sudo` for all commands that access this directory. The `run-docker-prod.sh` script handles this automatically via `sudo test`.
+
 The two files used by mcp-banana are:
 
 - `fullchain.pem` — the TLS certificate (set as `MCP_TLS_CERT_FILE=/certs/fullchain.pem`)
