@@ -100,25 +100,54 @@ Both headers are required in this configuration:
 
 ---
 
-## Option D: Claude Desktop (OAuth)
+## Option D: Claude Desktop (via `mcp-remote`)
 
-OAuth 2.1 lets Claude Desktop users authenticate through a browser sign-in flow instead of a bearer token.
+Connect Claude Desktop to a remote mcp-banana server using `mcp-remote` as a stdio-to-HTTP bridge. This is the recommended approach because Claude Desktop Connectors route through Anthropic's cloud infrastructure, which may not reach non-standard ports like 8847.
+
+`mcp-remote` connects directly from your machine, handles OAuth authentication automatically, and opens a browser for the sign-in flow on first use.
 
 **Prerequisites:**
 
+- Node.js and `npx` installed (`which npx` to verify)
 - OAuth configured on the server — see [Authentication — Option 3](authentication.md#option-3-oauth-21-claude-desktop) for provider setup
 - TLS enabled on the server (HTTPS is required for OAuth)
 - The server is running and reachable at `https://mcp.yourdomain.com:8847`
 
 **Steps:**
 
-1. Open Claude Desktop.
-2. Go to **Customize > Connectors**.
-3. Add your server URL: `https://mcp.yourdomain.com:8847/mcp`
-4. Claude Desktop fetches the OAuth discovery document at `/.well-known/oauth-authorization-server`, registers a client dynamically, and redirects you to sign in.
-5. Click your provider (Google, GitHub, or Apple) and complete the browser sign-in flow.
+1. Open your Claude Desktop config file:
 
-After sign-in, Claude Desktop stores the OAuth access and refresh tokens and handles token refresh automatically (access tokens expire after 1 hour; refresh tokens after 30 days).
+   - **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+2. Add the `mcpServers` block (merge with existing config if the file already has content):
+
+   ```json
+   {
+     "mcpServers": {
+       "banana": {
+         "command": "npx",
+         "args": ["mcp-remote", "https://mcp.yourdomain.com:8847/mcp"]
+       }
+     }
+   }
+   ```
+
+   Replace `mcp.yourdomain.com` with your actual domain.
+
+3. Fully quit Claude Desktop (Quit from the menu bar, not just close the window).
+
+4. Reopen Claude Desktop. On the first connection, `mcp-remote` will:
+   - Discover the OAuth endpoints via `/.well-known/oauth-protected-resource`
+   - Register a client dynamically via `/register`
+   - Open your browser to sign in with Google, GitHub, or Apple
+   - Store the OAuth tokens locally for future sessions
+
+5. After sign-in, the `banana` tools (generate_image, edit_image, list_models, recommend_model) will appear in Claude Desktop.
+
+**Token refresh:** `mcp-remote` handles token refresh automatically. Access tokens expire after 1 hour; refresh tokens after 30 days. If your refresh token expires, `mcp-remote` will re-open the browser for sign-in.
+
+**Sending your own Gemini API key:** Unlike Claude Code, Claude Desktop does not support custom HTTP headers in `mcp-remote` config. If the server has no `GEMINI_API_KEY` configured, ask the server operator to set one, or use Claude Code with Option B or C instead.
 
 ---
 
