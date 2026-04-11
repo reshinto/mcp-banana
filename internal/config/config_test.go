@@ -222,6 +222,20 @@ func TestLoad_OAuthConfigFields(test *testing.T) {
 	}
 }
 
+func TestLoad_OAuthBaseURL_DerivedFromMCPDomain(test *testing.T) {
+	test.Setenv("OAUTH_BASE_URL", "")
+	test.Setenv("MCP_DOMAIN", "banana.example.com")
+
+	cfg, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("unexpected error: %v", loadError)
+	}
+	expected := "https://banana.example.com:8847"
+	if cfg.OAuthBaseURL != expected {
+		test.Errorf("expected OAuthBaseURL %q, got %q", expected, cfg.OAuthBaseURL)
+	}
+}
+
 func TestLoad_TLSConfigFields(test *testing.T) {
 	test.Setenv("MCP_TLS_CERT_FILE", "/certs/cert.pem")
 	test.Setenv("MCP_TLS_KEY_FILE", "/certs/key.pem")
