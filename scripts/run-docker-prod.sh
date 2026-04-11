@@ -87,9 +87,9 @@ if grep -q "^OAUTH_BASE_URL=$" .env 2>/dev/null; then
 fi
 
 if grep -q "^MCP_TLS_CERT_FILE=$" .env 2>/dev/null; then
-  sed -i.bak "s|^MCP_TLS_CERT_FILE=$|MCP_TLS_CERT_FILE=/certs/fullchain.pem|" .env && rm -f .env.bak
-  sed -i.bak "s|^MCP_TLS_KEY_FILE=$|MCP_TLS_KEY_FILE=/certs/privkey.pem|" .env && rm -f .env.bak
-  echo "[auto] MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /certs/ paths"
+  sed -i.bak "s|^MCP_TLS_CERT_FILE=$|MCP_TLS_CERT_FILE=/etc/letsencrypt/live/${DOMAIN}/fullchain.pem|" .env && rm -f .env.bak
+  sed -i.bak "s|^MCP_TLS_KEY_FILE=$|MCP_TLS_KEY_FILE=/etc/letsencrypt/live/${DOMAIN}/privkey.pem|" .env && rm -f .env.bak
+  echo "[auto] MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /etc/letsencrypt/live/${DOMAIN}/ paths"
   UPDATED_ENV=true
 fi
 

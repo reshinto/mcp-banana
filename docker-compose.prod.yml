@@ -1,4 +1,4 @@
 services:
   mcp-banana:
     volumes:
-      - /etc/letsencrypt/live/${MCP_DOMAIN:-mcp.yourdomain.com}:/certs:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro

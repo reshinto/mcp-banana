@@ -272,8 +272,10 @@ sudo ls /etc/letsencrypt/live/mcp.yourdomain.com/
 
 The two files used by mcp-banana are:
 
-- `fullchain.pem` — the TLS certificate (set as `MCP_TLS_CERT_FILE=/certs/fullchain.pem`)
-- `privkey.pem` — the private key (set as `MCP_TLS_KEY_FILE=/certs/privkey.pem`)
+- `fullchain.pem` — the TLS certificate
+- `privkey.pem` — the private key
+
+The `run-docker-prod.sh` script automatically sets `MCP_TLS_CERT_FILE` and `MCP_TLS_KEY_FILE` in `.env` to point to these files inside the container.
 
 **Verify the certificate is valid:**
 
@@ -308,9 +310,9 @@ cp .env.example .env
 # Domain — used by run-docker-prod.sh to locate TLS certs
 MCP_DOMAIN=mcp.yourdomain.com
 
-# TLS (required for HTTPS)
-MCP_TLS_CERT_FILE=/certs/fullchain.pem
-MCP_TLS_KEY_FILE=/certs/privkey.pem
+# TLS (auto-populated by run-docker-prod.sh — leave empty)
+MCP_TLS_CERT_FILE=
+MCP_TLS_KEY_FILE=
 
 # Bearer token auth (generate with: openssl rand -hex 32)
 MCP_AUTH_TOKEN=<paste-your-generated-token>
@@ -327,7 +329,7 @@ MCP_MAX_IMAGE_BYTES=4194304
 MCP_REQUEST_TIMEOUT_SECS=120
 ```
 
-**How `docker-compose.prod.yml` works:** The production overlay changes the port binding from `127.0.0.1:8847` to `0.0.0.0:8847` (publicly reachable) and mounts `/etc/letsencrypt/live/<MCP_DOMAIN>` into the container at `/certs` (read-only). The `MCP_TLS_CERT_FILE=/certs/fullchain.pem` and `MCP_TLS_KEY_FILE=/certs/privkey.pem` paths reference files inside this mount.
+**How `docker-compose.prod.yml` works:** The production overlay mounts the entire `/etc/letsencrypt` directory into the container (read-only). This is necessary because Let's Encrypt stores cert files as symlinks in `live/` pointing to `archive/` — mounting only the `live/` subdirectory would break the symlinks. The `run-docker-prod.sh` script sets `MCP_BIND_ADDRESS=0.0.0.0` (public) and auto-populates the TLS file paths in `.env`.
 
 ### Step 5 — Configure OAuth (optional)
 
