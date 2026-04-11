@@ -242,3 +242,44 @@ func TestStore_CleanupExpired(test *testing.T) {
 		test.Error("expected valid provider session to survive cleanup")
 	}
 }
+
+func TestGetAccessTokenData_ReturnsIdentity(test *testing.T) {
+	store := NewStore()
+	store.StoreAccessToken(&TokenData{
+		Token:            "access-token-123",
+		ClientID:         "client-1",
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(time.Hour),
+	})
+
+	tokenData := store.GetAccessTokenData("access-token-123")
+	if tokenData == nil {
+		test.Fatal("expected non-nil token data")
+	}
+	if tokenData.ProviderIdentity != "google:user@example.com" {
+		test.Errorf("expected google:user@example.com, got: %s", tokenData.ProviderIdentity)
+	}
+}
+
+func TestGetAccessTokenData_ReturnsNilForExpired(test *testing.T) {
+	store := NewStore()
+	store.StoreAccessToken(&TokenData{
+		Token:            "expired-token",
+		ClientID:         "client-1",
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(-time.Hour),
+	})
+
+	tokenData := store.GetAccessTokenData("expired-token")
+	if tokenData != nil {
+		test.Error("expected nil for expired token")
+	}
+}
+
+func TestGetAccessTokenData_ReturnsNilForMissing(test *testing.T) {
+	store := NewStore()
+	tokenData := store.GetAccessTokenData("nonexistent")
+	if tokenData != nil {
+		test.Error("expected nil for missing token")
+	}
+}

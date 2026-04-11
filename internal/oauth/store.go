@@ -14,25 +14,28 @@ type Client struct {
 
 // AuthCode represents a single-use OAuth 2.1 authorization code with PKCE support.
 type AuthCode struct {
-	Code          string
-	ClientID      string
-	RedirectURI   string
-	CodeChallenge string
-	ExpiresAt     time.Time
+	Code             string
+	ClientID         string
+	RedirectURI      string
+	CodeChallenge    string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
 }
 
 // TokenData holds an issued access token and its associated metadata.
 type TokenData struct {
-	Token     string
-	ClientID  string
-	ExpiresAt time.Time
+	Token            string
+	ClientID         string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
 }
 
 // RefreshData holds a single-use refresh token and its associated metadata.
 type RefreshData struct {
-	Token     string
-	ClientID  string
-	ExpiresAt time.Time
+	Token            string
+	ClientID         string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
 }
 
 // ProviderSession tracks an in-flight upstream OAuth provider authorization,
@@ -112,6 +115,22 @@ func (store *Store) StoreAccessToken(tokenData *TokenData) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	store.accessTokens[tokenData.Token] = tokenData
+}
+
+// GetAccessTokenData returns the full token data for the given access token,
+// or nil if the token does not exist or has expired. Unlike ValidateAccessToken,
+// this method returns the associated metadata including the provider identity.
+func (store *Store) GetAccessTokenData(token string) *TokenData {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	tokenData, exists := store.accessTokens[token]
+	if !exists {
+		return nil
+	}
+	if time.Now().After(tokenData.ExpiresAt) {
+		return nil
+	}
+	return tokenData
 }
 
 // ValidateAccessToken returns true if the token exists and has not expired.
