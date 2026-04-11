@@ -80,16 +80,24 @@ echo "[ok] Docker installed ($(docker --version | grep -oP '[\d.]+' | head -1))"
 # --- Step 4: Auto-populate .env fields ---
 UPDATED_ENV=false
 
-if grep -q "^OAUTH_BASE_URL=$" .env 2>/dev/null; then
-  sed -i.bak "s|^OAUTH_BASE_URL=$|OAUTH_BASE_URL=https://${DOMAIN}:8847|" .env && rm -f .env.bak
-  echo "[auto] OAUTH_BASE_URL set to https://${DOMAIN}:8847"
+EXPECTED_OAUTH_URL="https://${DOMAIN}:8847"
+CURRENT_OAUTH_URL=$(grep "^OAUTH_BASE_URL=" .env 2>/dev/null | cut -d= -f2-)
+if [ "$CURRENT_OAUTH_URL" != "$EXPECTED_OAUTH_URL" ]; then
+  sed -i.bak "s|^OAUTH_BASE_URL=.*|OAUTH_BASE_URL=${EXPECTED_OAUTH_URL}|" .env && rm -f .env.bak
+  echo "[auto] OAUTH_BASE_URL set to ${EXPECTED_OAUTH_URL}"
   UPDATED_ENV=true
 fi
 
-if grep -q "^MCP_TLS_CERT_FILE=$" .env 2>/dev/null; then
-  sed -i.bak "s|^MCP_TLS_CERT_FILE=$|MCP_TLS_CERT_FILE=/etc/letsencrypt/live/${DOMAIN}/fullchain.pem|" .env && rm -f .env.bak
-  sed -i.bak "s|^MCP_TLS_KEY_FILE=$|MCP_TLS_KEY_FILE=/etc/letsencrypt/live/${DOMAIN}/privkey.pem|" .env && rm -f .env.bak
-  echo "[auto] MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE set to /etc/letsencrypt/live/${DOMAIN}/ paths"
+EXPECTED_CERT="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
+EXPECTED_KEY="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
+CURRENT_CERT=$(grep "^MCP_TLS_CERT_FILE=" .env 2>/dev/null | cut -d= -f2-)
+CURRENT_KEY=$(grep "^MCP_TLS_KEY_FILE=" .env 2>/dev/null | cut -d= -f2-)
+
+if [ "$CURRENT_CERT" != "$EXPECTED_CERT" ] || [ "$CURRENT_KEY" != "$EXPECTED_KEY" ]; then
+  sed -i.bak "s|^MCP_TLS_CERT_FILE=.*|MCP_TLS_CERT_FILE=${EXPECTED_CERT}|" .env && rm -f .env.bak
+  sed -i.bak "s|^MCP_TLS_KEY_FILE=.*|MCP_TLS_KEY_FILE=${EXPECTED_KEY}|" .env && rm -f .env.bak
+  echo "[auto] MCP_TLS_CERT_FILE set to ${EXPECTED_CERT}"
+  echo "[auto] MCP_TLS_KEY_FILE set to ${EXPECTED_KEY}"
   UPDATED_ENV=true
 fi
 
