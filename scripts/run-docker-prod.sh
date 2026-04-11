@@ -117,7 +117,7 @@ if [ ! -f credentials.json ]; then
   echo "[note] Created credentials.json"
 fi
 sudo chown 65532:65532 credentials.json
-chmod 600 credentials.json
+sudo chmod 600 credentials.json
 
 # --- Step 5: Check and generate TLS certificates ---
 # Note: /etc/letsencrypt is owned by root (mode 700), so all checks use sudo.
