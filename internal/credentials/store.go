@@ -10,6 +10,11 @@ import (
 	"sync"
 )
 
+// jsonMarshalIndent is the function used to serialize credentials to JSON.
+// It is a package-level variable so tests can inject failures for the marshal
+// error path that is otherwise unreachable with map[string]string values.
+var jsonMarshalIndent = json.MarshalIndent
+
 // Store provides thread-safe access to a JSON credentials file that maps
 // client identities to Gemini API keys.
 type Store struct {
@@ -81,7 +86,7 @@ func (store *Store) Register(identity string, geminiAPIKey string) error {
 
 	entries[identity] = geminiAPIKey
 
-	serialized, marshalError := json.MarshalIndent(entries, "", "  ")
+	serialized, marshalError := jsonMarshalIndent(entries, "", "  ")
 	if marshalError != nil {
 		return fmt.Errorf("failed to serialize credentials: %w", marshalError)
 	}

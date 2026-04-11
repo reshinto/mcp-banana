@@ -2,6 +2,7 @@ package credentials
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -205,6 +206,108 @@ func TestExists_ReturnsFalseForUnknownIdentity(test *testing.T) {
 
 	if store.Exists("unknown-identity") {
 		test.Error("expected Exists to return false for unknown identity")
+	}
+}
+
+func TestNewStore_FailsWhenDirectoryNotWritable(test *testing.T) {
+	tempDir := test.TempDir()
+	readOnlyDir := filepath.Join(tempDir, "readonly")
+	mkdirError := os.Mkdir(readOnlyDir, 0500)
+	if mkdirError != nil {
+		test.Fatalf("failed to create read-only directory: %v", mkdirError)
+	}
+
+	credPath := filepath.Join(readOnlyDir, "credentials.json")
+	_, createError := NewStore(credPath)
+	if createError == nil {
+		test.Fatal("expected error when directory is not writable, got nil")
+	}
+}
+
+func TestRegister_FailsOnMarshalError(test *testing.T) {
+	tempDir := test.TempDir()
+	credPath := filepath.Join(tempDir, "credentials.json")
+
+	store, createError := NewStore(credPath)
+	if createError != nil {
+		test.Fatalf("NewStore returned error: %v", createError)
+	}
+
+	originalMarshal := jsonMarshalIndent
+	defer func() { jsonMarshalIndent = originalMarshal }()
+
+	jsonMarshalIndent = func(value any, prefix string, indent string) ([]byte, error) {
+		return nil, fmt.Errorf("simulated marshal failure")
+	}
+
+	registerError := store.Register("identity-marshal", "key-marshal")
+	if registerError == nil {
+		test.Fatal("expected error from marshal failure, got nil")
+	}
+}
+
+func TestRegister_FailsOnTempFileWriteError(test *testing.T) {
+	tempDir := test.TempDir()
+	credPath := filepath.Join(tempDir, "credentials.json")
+
+	store, createError := NewStore(credPath)
+	if createError != nil {
+		test.Fatalf("NewStore returned error: %v", createError)
+	}
+
+	// Make the directory read-only so the temp file write fails.
+	chmodError := os.Chmod(tempDir, 0500)
+	if chmodError != nil {
+		test.Fatalf("failed to chmod directory: %v", chmodError)
+	}
+	defer os.Chmod(tempDir, 0700) //nolint:errcheck
+
+	registerError := store.Register("identity-write", "key-write")
+	if registerError == nil {
+		test.Fatal("expected error from temp file write failure, got nil")
+	}
+}
+
+func TestRegister_FailsOnRenameError(test *testing.T) {
+	tempDir := test.TempDir()
+	subDir := filepath.Join(tempDir, "subdir")
+	subDirError := os.Mkdir(subDir, 0700)
+	if subDirError != nil {
+		test.Fatalf("failed to create subdir: %v", subDirError)
+	}
+
+	credPath := filepath.Join(subDir, "credentials.json")
+
+	store, createError := NewStore(credPath)
+	if createError != nil {
+		test.Fatalf("NewStore returned error: %v", createError)
+	}
+
+	// Point filePath to a different directory so rename crosses paths and fails.
+	// We do this by writing the temp file to a location that prevents rename.
+	// Trick: remove the credentials file and make the directory read-only
+	// AFTER the temp file is written. We can't do that easily with the current
+	// code, so instead we'll make the target a directory to force rename to fail.
+	removeError := os.Remove(credPath)
+	if removeError != nil {
+		test.Fatalf("failed to remove credentials file: %v", removeError)
+	}
+	// Create a directory with the same name as the credentials file.
+	mkdirError := os.Mkdir(credPath, 0700)
+	if mkdirError != nil {
+		test.Fatalf("failed to create directory at cred path: %v", mkdirError)
+	}
+
+	registerError := store.Register("identity-rename", "key-rename")
+	if registerError == nil {
+		test.Fatal("expected error from rename failure, got nil")
+	}
+
+	// Verify the temp file was cleaned up.
+	tempPath := credPath + ".tmp"
+	_, statError := os.Stat(tempPath)
+	if !os.IsNotExist(statError) {
+		test.Error("expected temp file to be cleaned up after rename failure")
 	}
 }
 
