@@ -106,10 +106,9 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		logger.Warn("HTTP mode: no MCP_CREDENTIALS_FILE configured -- auth is disabled, relying on network-level security (SSH tunnel)")
 	}
 
-	var geminiClient *gemini.Client
-	clientCache := gemini.NewClientCache(nil, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
+	clientCache := gemini.NewClientCache(serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 
-	mcpServer := internalserver.NewMCPServer(geminiClient, clientCache, serverConfig.MaxImageBytes)
+	mcpServer := internalserver.NewMCPServer(clientCache, serverConfig.MaxImageBytes)
 
 	providers := oauth.BuildActiveProviders(
 		serverConfig.OAuthGoogleClientID, serverConfig.OAuthGoogleClientSecret,

@@ -17,9 +17,8 @@ import (
 
 // NewMCPServer creates and configures an MCP server with all four tool handlers
 // registered. Both HTTP and stdio transports share the returned instance.
-// clientCache is optional; when non-nil, per-request Gemini API keys extracted
-// from the X-Gemini-API-Key header are resolved to dedicated clients.
-func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
+// Per-request Gemini API keys are resolved from context by each handler via clientCache.
+func NewMCPServer(clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
 	srv := mcpserver.NewMCPServer("mcp-banana", "1.0.0")
 
 	generateImageTool := mcp.NewTool("generate_image",
@@ -35,7 +34,7 @@ func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache,
 			mcp.Description("Optional aspect ratio for the generated image (e.g. '16:9', '1:1')."),
 		),
 	)
-	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(service, clientCache, maxImageBytes))
+	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(clientCache, maxImageBytes))
 
 	editImageTool := mcp.NewTool("edit_image",
 		mcp.WithDescription("Edit an existing image using text instructions and the Gemini image editing API."),
@@ -55,7 +54,7 @@ func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache,
 			mcp.Description("MIME type of the image (e.g. 'image/png', 'image/jpeg')."),
 		),
 	)
-	srv.AddTool(editImageTool, tools.NewEditImageHandler(service, clientCache, maxImageBytes))
+	srv.AddTool(editImageTool, tools.NewEditImageHandler(clientCache, maxImageBytes))
 
 	listModelsTool := mcp.NewTool("list_models",
 		mcp.WithDescription("List all available model aliases and their capabilities."),

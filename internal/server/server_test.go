@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,15 +20,9 @@ import (
 	"github.com/reshinto/mcp-banana/internal/server"
 )
 
-// mockGeminiService is a test double for gemini.GeminiService.
-type mockGeminiService struct{}
-
-func (mockGeminiService) GenerateImage(_ context.Context, _ string, _ string, _ gemini.GenerateOptions) (*gemini.ImageResult, error) {
-	return &gemini.ImageResult{ImageBase64: "abc", MIMEType: "image/png", ModelUsed: "nano"}, nil
-}
-
-func (mockGeminiService) EditImage(_ context.Context, _ string, _ []byte, _ string, _ string) (*gemini.ImageResult, error) {
-	return &gemini.ImageResult{ImageBase64: "def", MIMEType: "image/jpeg", ModelUsed: "nano"}, nil
+// testClientCache returns a ClientCache for use in server tests.
+func testClientCache() *gemini.ClientCache {
+	return gemini.NewClientCache(30, 2)
 }
 
 // noAuthConfig returns a config with no auth configured (SSH tunnel mode).
@@ -73,7 +66,7 @@ func createCredStore(test *testing.T, entries map[string]string) *credentials.St
 // buildHandler wires the full stack (MCP server + middleware) using the provided
 // config and credentials store. Pass nil credStore for no-auth mode.
 func buildHandler(cfg *config.Config, credStore *credentials.Store) http.Handler {
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
 	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil, credStore)
 }
 
@@ -439,7 +432,7 @@ func TestMiddlewareRetryAfterClampedToOne(test *testing.T) {
 
 // buildHandlerWithOAuthAndCreds creates a handler with an oauth.Store and credentials store.
 func buildHandlerWithOAuthAndCreds(cfg *config.Config, oauthStore *oauth.Store, credStore *credentials.Store) http.Handler {
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
 	return server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), oauthStore, nil, credStore)
 }
 
@@ -518,7 +511,7 @@ func TestNewHTTPHandler_OAuthRoutesMounted(test *testing.T) {
 		oauth.NewGoogleProvider("client-id", "client-secret"),
 	}
 
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
 	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
@@ -545,7 +538,7 @@ func TestNewHTTPHandler_OAuthRoutesNotMounted(test *testing.T) {
 		OAuthBaseURL:      "https://example.com",
 	}
 
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
 	// Passing nil store — OAuth routes should NOT be mounted.
 	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), nil, nil, nil)
 
@@ -572,7 +565,7 @@ func TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL(test *testing.T) {
 	}
 
 	store := oauth.NewStore()
-	mcpSrv := server.NewMCPServer(mockGeminiService{}, nil, cfg.MaxImageBytes)
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
 	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)

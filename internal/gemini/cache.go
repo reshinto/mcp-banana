@@ -7,24 +7,20 @@ import (
 )
 
 // ClientCache manages a pool of Gemini clients, one per unique API key.
-// The default client (from server config) is always available and returned
-// when no per-request key is provided. Additional clients are created on demand
-// and cached for reuse across requests from the same user.
+// All clients are created on demand from per-request keys resolved by
+// middleware and cached for reuse across requests from the same user.
 type ClientCache struct {
 	mutex          sync.RWMutex
-	defaultClient  *Client
-	clients        map[string]*Client
+	clients        map[string]GeminiService
 	timeoutSecs    int
 	proConcurrency int
 }
 
-// NewClientCache creates a cache with a pre-configured default client.
-// The default client is used when no per-request API key is present.
+// NewClientCache creates an empty client cache.
 // timeoutSecs and proConcurrency are applied to all newly created per-user clients.
-func NewClientCache(defaultClient *Client, timeoutSecs int, proConcurrency int) *ClientCache {
+func NewClientCache(timeoutSecs int, proConcurrency int) *ClientCache {
 	return &ClientCache{
-		defaultClient:  defaultClient,
-		clients:        make(map[string]*Client),
+		clients:        make(map[string]GeminiService),
 		timeoutSecs:    timeoutSecs,
 		proConcurrency: proConcurrency,
 	}
@@ -36,12 +32,13 @@ func NewClientCache(defaultClient *Client, timeoutSecs int, proConcurrency int) 
 var afterReadMiss func()
 
 // GetClient returns a Gemini client for the given API key.
-// If apiKey is empty, the default client is returned.
-// If a client for apiKey is already cached, it is returned without creating a new one.
-// Otherwise a new client is created, cached, and returned.
-func (cache *ClientCache) GetClient(ctx context.Context, apiKey string) (*Client, error) {
+// If apiKey is empty, an error is returned — all requests must have a key
+// resolved by middleware. If a client for apiKey is already cached, it is
+// returned without creating a new one. Otherwise a new client is created,
+// cached, and returned.
+func (cache *ClientCache) GetClient(ctx context.Context, apiKey string) (GeminiService, error) {
 	if apiKey == "" {
-		return cache.defaultClient, nil
+		return nil, fmt.Errorf("API key is required")
 	}
 
 	// Fast path: check cache under read lock.
@@ -74,4 +71,13 @@ func (cache *ClientCache) GetClient(ctx context.Context, apiKey string) (*Client
 
 	cache.clients[apiKey] = created
 	return created, nil
+}
+
+// SetClientForKey injects a pre-built GeminiService into the cache for the given key.
+// This is intended for tests that need to control client behavior without
+// going through the real client factory.
+func (cache *ClientCache) SetClientForKey(apiKey string, client GeminiService) {
+	cache.mutex.Lock()
+	defer cache.mutex.Unlock()
+	cache.clients[apiKey] = client
 }
