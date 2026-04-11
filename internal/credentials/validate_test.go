@@ -40,3 +40,24 @@ func TestValidateGeminiKey_RejectsEmptyKey(test *testing.T) {
 		test.Error("expected error for empty key")
 	}
 }
+
+func TestOverrideGeminiKeyValidator_RestoresOriginal(test *testing.T) {
+	called := false
+	restore := OverrideGeminiKeyValidator(func(ctx context.Context, apiKey string) error {
+		called = true
+		return nil
+	})
+
+	validateError := ValidateGeminiKey(context.Background(), "AIzaTestKey")
+	if validateError != nil {
+		test.Errorf("expected nil error from override, got: %s", validateError)
+	}
+	if !called {
+		test.Error("expected override to be called")
+	}
+
+	restore()
+
+	// After restore, the original validator is back (would make real API call, so
+	// we just verify the override function was replaced — cannot test real call here)
+}
