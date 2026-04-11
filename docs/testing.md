@@ -135,7 +135,7 @@ This lets handler tests run without a network connection or API key.
 Use `test.Setenv` to set environment variables for a single test. The value is automatically restored when the test ends — no manual cleanup needed:
 
 ```go
-test.Setenv("GEMINI_API_KEY", "test-key")
+test.Setenv("MCP_CREDENTIALS_FILE", "/tmp/test-creds.json")
 test.Setenv("MCP_LOG_LEVEL", "debug")
 cfg, loadError := Load()
 ```

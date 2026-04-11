@@ -78,7 +78,7 @@ To verify or update a mapping:
 1. Check the [Gemini API Models documentation](https://ai.google.dev/gemini-api/docs/models) or list models via the API:
 
    ```bash
-   curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY"
+   curl "https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_GEMINI_API_KEY"
    ```
 
 2. Find the model IDs for image generation models. Confirm which IDs correspond to flash and pro image generation variants.

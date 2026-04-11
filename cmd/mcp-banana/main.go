@@ -18,6 +18,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/reshinto/mcp-banana/internal/config"
+	"github.com/reshinto/mcp-banana/internal/credentials"
 	"github.com/reshinto/mcp-banana/internal/gemini"
 	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/security"
@@ -83,10 +84,6 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 1
 	}
 
-	security.RegisterSecret(serverConfig.GeminiAPIKey)
-	if serverConfig.AuthToken != "" {
-		security.RegisterSecret(serverConfig.AuthToken)
-	}
 	security.RegisterSecret(serverConfig.OAuthGoogleClientSecret)
 	security.RegisterSecret(serverConfig.OAuthGitHubClientSecret)
 	security.RegisterSecret(serverConfig.OAuthAppleClientSecret)
@@ -94,33 +91,20 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	logLevel := resolveLogLevel(serverConfig.LogLevel)
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: logLevel}))
 
-	if *transport == "http" && serverConfig.AuthToken == "" && serverConfig.AuthTokensFile == "" {
-		logger.Warn("HTTP mode: no MCP_AUTH_TOKEN or MCP_AUTH_TOKENS_FILE configured -- auth is disabled, relying on network-level security (SSH tunnel)")
-	}
-
-	startupContext := context.Background()
-	var geminiClient *gemini.Client
-	var clientCache *gemini.ClientCache
-
-	if serverConfig.GeminiAPIKey != "" {
-		var clientError error
-		geminiClient, clientError = clientFactory(
-			startupContext,
-			serverConfig.GeminiAPIKey,
-			serverConfig.RequestTimeoutSecs,
-			serverConfig.ProConcurrency,
-		)
-		if clientError != nil {
-			_, _ = fmt.Fprintf(stderr, "failed to create Gemini client: %s\n", clientError)
+	// Load credentials file if configured via MCP_CREDENTIALS_FILE.
+	var credStore *credentials.Store
+	if serverConfig.CredentialsFile != "" {
+		var credError error
+		credStore, credError = credentials.NewStore(serverConfig.CredentialsFile)
+		if credError != nil {
+			_, _ = fmt.Fprintf(stderr, "failed to load credentials file: %s\n", credError)
 			return 1
 		}
-		clientCache = gemini.NewClientCache(geminiClient, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
-	} else {
-		logger.Info("no GEMINI_API_KEY configured -- clients must provide their own key via X-Gemini-API-Key header")
-		clientCache = gemini.NewClientCache(nil, serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
 	}
 
-	mcpServer := internalserver.NewMCPServer(geminiClient, clientCache, serverConfig.MaxImageBytes)
+	clientCache := gemini.NewClientCache(serverConfig.RequestTimeoutSecs, serverConfig.ProConcurrency)
+
+	mcpServer := internalserver.NewMCPServer(clientCache, serverConfig.MaxImageBytes)
 
 	providers := oauth.BuildActiveProviders(
 		serverConfig.OAuthGoogleClientID, serverConfig.OAuthGoogleClientSecret,
@@ -148,7 +132,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 	case "http":
-		return runHTTPServer(mcpServer, serverConfig, logger, *address, oauthStore, providers)
+		return runHTTPServer(mcpServer, serverConfig, logger, *address, oauthStore, providers, credStore)
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown transport: %s (must be stdio or http)\n", *transport)
 		return 1
@@ -211,8 +195,8 @@ var oauthCleanupInterval = 5 * time.Minute
 // When TLSCertFile and TLSKeyFile are both set in serverConfig, the server
 // listens with TLS. oauthStore and providers are passed through to NewHTTPHandler
 // to optionally register OAuth 2.1 routes.
-func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, logger *slog.Logger, address string, oauthStore *oauth.Store, providers []oauth.ProviderConfig) int {
-	handler := internalserver.NewHTTPHandler(mcpServer, serverConfig, logger, oauthStore, providers)
+func runHTTPServer(mcpServer *server.MCPServer, serverConfig *config.Config, logger *slog.Logger, address string, oauthStore *oauth.Store, providers []oauth.ProviderConfig, credStore *credentials.Store) int {
+	handler := internalserver.NewHTTPHandler(mcpServer, serverConfig, logger, oauthStore, providers, credStore)
 	httpServer := &http.Server{
 		Handler:     handler,
 		ReadTimeout: 30 * time.Second,

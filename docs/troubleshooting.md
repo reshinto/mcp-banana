@@ -4,13 +4,13 @@
 
 | Problem | Error / Symptom | Cause | Fix |
 |---|---|---|---|
-| **Server won't start** | `GEMINI_API_KEY is required` | `GEMINI_API_KEY` not set | Set it in `.env` or your shell; get a key at [aistudio.google.com](https://aistudio.google.com/) |
+| **Server won't start** | `credentials file error` or `cannot read MCP_CREDENTIALS_FILE` | Credentials file path is invalid or unreadable | Check `MCP_CREDENTIALS_FILE` in `.env` (defaults to `credentials.json`). The server auto-creates the file if missing, but the parent directory must exist |
 | **Server won't start** | `registry validation failed: model "..." has unverified GeminiID` | Sentinel model IDs still present in `registry.go` | Follow the verification procedure in [models.md](models.md) |
 | **Server won't start** | `both MCP_TLS_CERT_FILE and MCP_TLS_KEY_FILE must be set together` | Only one of the two TLS vars is set | Set both, or clear both |
 | **Server won't start** | `MCP_PRO_CONCURRENCY (N) must be <= MCP_GLOBAL_CONCURRENCY (M)` | `MCP_PRO_CONCURRENCY` exceeds the global limit | Lower `MCP_PRO_CONCURRENCY` or raise `MCP_GLOBAL_CONCURRENCY` |
-| **Auth failure** | `401 {"error":"unauthorized"}` | Wrong or missing bearer token | Check the `Authorization: Bearer <token>` header matches the server's configured token |
+| **Auth failure** | `401 {"error":"unauthorized"}` | Wrong or missing bearer token | Check the `Authorization: Bearer <token>` header matches an entry in the credentials file |
 | **Auth failure** | `401` immediately after OAuth sign-in | OAuth access token expired (1-hour TTL) | Re-authenticate via Claude Desktop Connectors to get a fresh token |
-| **Auth failure** | No auth configured, requests still rejected | `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS_FILE` is set but the token doesn't match | Verify the token in your client config matches exactly what is in `.env` or `tokens.txt` |
+| **Auth failure** | No auth configured, requests still rejected | Bearer token not found in credentials file | Verify the token in your client config matches an entry in `credentials.json`. Use self-registration (send both `Authorization` and `X-Gemini-API-Key` headers) to add a new entry |
 | **Connection failure** | `connection refused` on HTTP mode | SSH tunnel not running, or server is down | Start the tunnel; verify the server with `curl http://127.0.0.1:8847/healthz` |
 | **Connection failure** | Wrong URL in Claude Code config | Port, host, or path is wrong | URL must be `http[s]://<host>:8847/mcp` — note the `/mcp` path suffix |
 | **Connection failure** | Port not exposed in Docker | `ports` block missing from `docker-compose.yml` | Confirm the port mapping is present and `docker compose ps` shows the port bound |
@@ -36,7 +36,7 @@
 | **OAuth: Claude Desktop can't connect** | Timeout or TLS error in Claude Desktop | Server not reachable over HTTPS, or `OAUTH_BASE_URL` does not match the actual URL | Verify `curl https://mcp.yourdomain.com:8847/healthz` succeeds; confirm `OAUTH_BASE_URL` matches exactly |
 | **OAuth: Apple callback fails locally** | Apple redirect fails or returns error | Apple Sign-In does not support `http://localhost` callbacks | Test Apple only on production with HTTPS. Use Google or GitHub for local OAuth testing |
 | **OAuth: Apple secret expired** | `invalid_client` from Apple after weeks/months | Apple uses JWT-based client secrets that expire (max 6 months) | Regenerate the JWT from your Apple private key and update `OAUTH_APPLE_CLIENT_SECRET` in `.env` |
-| **OAuth: 401 triggers OAuth flow** | Claude Code shows "authenticate banana MCP server" instead of calling tools | An `Authorization` header with an invalid/mismatched token causes 401, which Claude Code interprets as needing OAuth | Remove the `Authorization` header from your Claude Code MCP config if auth is disabled, or set the correct token |
+| **OAuth: 401 triggers OAuth flow** | Claude Code shows "authenticate banana MCP server" instead of calling tools | An `Authorization` header with an invalid/mismatched token causes 401, which Claude Code interprets as needing OAuth | Ensure your bearer token is registered in the credentials file (via self-registration or admin), or remove the `Authorization` header if auth is disabled |
 | **Per-user key: X-Gemini-API-Key not working** | Calls use the server key instead of the personal key | Header not included in Claude Code config | Add `"X-Gemini-API-Key": "<your-key>"` to the `headers` block in your `claude mcp add-json` command |
 | **Per-user key: key rejected by Gemini** | `generation_failed` with an auth error | The key in `X-Gemini-API-Key` is invalid or revoked | Test the key: `curl "https://generativelanguage.googleapis.com/v1beta/models?key=<your-key>"` |
 
@@ -67,13 +67,13 @@ docker compose logs -f mcp-banana         # Follow logs in real time
 docker compose logs --tail=50 mcp-banana
 ```
 
-### Test the Gemini API Key Directly
+### Test a Gemini API Key Directly
 
 ```bash
-curl "https://generativelanguage.googleapis.com/v1beta/models?key=$GEMINI_API_KEY"
+curl "https://generativelanguage.googleapis.com/v1beta/models?key=<your-gemini-api-key>"
 ```
 
-A valid key returns a JSON list of models. An invalid key returns a 400 or 403 error. If this call fails, every image generation request will also fail.
+A valid key returns a JSON list of models. An invalid key returns a 400 or 403 error. If this call fails, image generation requests using that key will also fail. Check the key values stored in `credentials.json`.
 
 ### Test the Health Endpoint
 

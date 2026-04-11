@@ -8,6 +8,9 @@ mcp-banana
 .env.local
 .env.*.local
 
+# Credentials (auto-generated, contains secrets)
+credentials.json
+
 # IDE
 .vscode/
 .idea/

@@ -2,16 +2,15 @@
 
 ## Overview
 
-Authentication in HTTP mode is optional. Three auth methods and per-user API keys are available depending on your security needs.
+Authentication in HTTP mode uses a unified credentials file that maps client identities to Gemini API keys. Two auth methods are available depending on your client.
 
 | Method | When to use | Config needed |
 |---|---|---|
 | **No auth (SSH tunnel)** | Server reachable only via SSH tunnel | Nothing — auth is skipped |
-| **Bearer token** | Solo developer or small trusted team | `MCP_AUTH_TOKEN` or `MCP_AUTH_TOKENS_FILE` |
+| **Credentials file** | Claude Code CLI users (bearer tokens or self-registration) | `MCP_CREDENTIALS_FILE` (defaults to `credentials.json`) |
 | **OAuth 2.1** | Claude Desktop GUI integration | `OAUTH_BASE_URL` + provider credentials |
-| **Per-user Gemini keys** | Claude Code users bill their own Gemini quota | `X-Gemini-API-Key` header (Claude Code only — not supported by Claude Desktop) |
 
-If neither `MCP_AUTH_TOKEN` nor `MCP_AUTH_TOKENS_FILE` is set, the server logs a warning and runs without bearer token auth. This is safe when all access goes through an SSH tunnel.
+The credentials file maps bearer tokens and OAuth identities to Gemini API keys. It is hot-reloaded on every request. If the file does not exist, the server creates it with an empty `{}` object.
 
 ## Auth Priority Order
 
@@ -21,11 +20,12 @@ On every request, the middleware checks in this order:
 Client sends: Authorization: Bearer <token>
   |
   v
-1. MCP_AUTH_TOKENS_FILE set? Read file from disk (hot-reload), check token. ALLOW if match.
-2. MCP_AUTH_TOKEN set? Check token against env var. ALLOW if match.
-3. OAuth store present? Validate as OAuth access token. ALLOW if valid and not expired.
+1. OAuth access token? Validate via OAuth store. ALLOW if valid and not expired.
+2. Credentials file token? Look up token in MCP_CREDENTIALS_FILE. ALLOW if match.
+3. Self-registration? Both Authorization: Bearer <token> and X-Gemini-API-Key: <key>
+   headers present? Register the token → key mapping in credentials file. ALLOW.
 4. No auth configured at all? Skip auth entirely (SSH tunnel mode). ALLOW all requests.
-5. Auth configured but no match? 401 {"error":"unauthorized"}
+5. No match? 401 {"error":"unauthorized"}
 ```
 
 `GET /healthz` is always exempt from auth so Docker health checks work without credentials.
@@ -51,7 +51,7 @@ chmod 600 /home/alice/.ssh/authorized_keys
 chown -R alice:alice /home/alice/.ssh
 ```
 
-Leave both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` empty in `.env`. The server will log a warning at startup — this is expected.
+Leave `MCP_CREDENTIALS_FILE` at its default. The server creates an empty credentials file if one does not exist. Without any credentials entries, auth is skipped — this is expected for SSH tunnel mode.
 
 ### User Setup
 
@@ -96,116 +96,72 @@ Their tunnel disconnects immediately and they cannot reconnect.
 
 ---
 
-## Option 2: Bearer Token
+## Option 2: Credentials File
 
-### Single Token (solo or small team)
+The credentials file is a JSON object mapping bearer tokens (or OAuth identities) to Gemini API keys. It is hot-reloaded on every request — no server restart needed for changes.
 
-Generate a token:
+### File format
+
+```json
+{
+  "a1b2c3d4e5f6...": "AIzaSyA...",
+  "f6e5d4c3b2a1...": "AIzaSyB...",
+  "google:alice@company.com": "AIzaSyC..."
+}
+```
+
+Keys are bearer tokens or OAuth identity strings (`provider:email`). Values are Gemini API keys.
+
+### Admin setup
 
 ```bash
-openssl rand -hex 32
+# Set the credentials file path in .env (defaults to credentials.json)
+MCP_CREDENTIALS_FILE=credentials.json
 ```
 
-Add to server `.env`:
+The server creates the file with `{}` if it does not exist.
 
-```
-MCP_AUTH_TOKEN=<generated-token>
-```
+### Adding a user manually (no restart needed)
 
-Restart the container (single token is read at startup):
+Generate a bearer token and add it with the user's Gemini API key:
 
 ```bash
-docker compose restart
+TOKEN=$(openssl rand -hex 32)
+echo "Token for Alice: $TOKEN"
+# Edit credentials.json and add: "<token>": "<gemini-api-key>"
 ```
 
-**Limitations:** Token rotation requires every user to update their Claude Code config. No per-user revocation.
+Share the bearer token with Alice. She adds it to her Claude Code config.
 
-### Tokens File (recommended for teams)
+### Self-registration (no admin action needed)
 
-Each user gets a unique token stored in a file that is re-read on every request. Add, remove, or rotate tokens without restarting the server.
+A new user can register themselves by sending both headers on their first request:
 
-**Admin setup:**
+- `Authorization: Bearer <token>` — the user generates their own token
+- `X-Gemini-API-Key: <gemini-api-key>` — their personal Gemini key
 
-```bash
-# Create the tokens file
-touch /opt/mcp-banana/tokens.txt
-chmod 600 /opt/mcp-banana/tokens.txt
+The server writes the token-to-key mapping into the credentials file automatically. Subsequent requests only need the `Authorization` header.
 
-# Generate a token for each user (lines starting with # are comments)
-echo "# Alice (alice@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
-openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
+### Revoking a user (no restart needed)
 
-echo "# Bob (bob@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
-openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
-```
+Delete the user's entry from `credentials.json`. Their next request returns `401 {"error":"unauthorized"}` immediately.
 
-File format:
-
-```
-# Alice (alice@company.com) - generated 2026-04-10
-a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
-# Bob (bob@company.com) - generated 2026-04-10
-f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5
-```
-
-Add to `.env`:
-
-```
-MCP_AUTH_TOKENS_FILE=/opt/mcp-banana/tokens.txt
-```
-
-Restart once to pick up the new env var. After that, all token changes are hot-reloaded — no restart needed.
-
-**Adding a user (no restart needed):**
-
-```bash
-echo "# Charlie (charlie@company.com) - generated $(date +%Y-%m-%d)" >> /opt/mcp-banana/tokens.txt
-openssl rand -hex 32 >> /opt/mcp-banana/tokens.txt
-```
-
-**Revoking a user (no restart needed):**
-
-Delete the user's comment and token lines from `tokens.txt`. Their next request returns `401 {"error":"unauthorized"}` immediately.
-
-**Rotating a token (no restart needed):**
-
-```bash
-NEW_TOKEN=$(openssl rand -hex 32)
-echo "New token for Alice: $NEW_TOKEN"
-# Edit tokens.txt and replace Alice's old token line with the new one
-nano /opt/mcp-banana/tokens.txt
-# Share the new token with Alice — she updates her Claude Code config
-```
-
-**Manual token rotation steps:**
+### Rotating a token (no restart needed)
 
 1. Generate a new token: `openssl rand -hex 32`
-2. SSH into the server and update the token in `/opt/mcp-banana/.env` or `tokens.txt`
-3. Restart if using `MCP_AUTH_TOKEN`: `docker compose restart`
-4. Update your Claude Code MCP config with the new token (see [Claude Code Integration](claude-code-integration.md))
-
-Alternatively, run `make rotate-token` for guided instructions.
-
-**Viewing active tokens:**
-
-```bash
-# List all active tokens (skip comments and blank lines)
-grep -v '^#' /opt/mcp-banana/tokens.txt | grep -v '^$'
-
-# Count active tokens
-grep -cv '^#\|^$' /opt/mcp-banana/tokens.txt
-```
+2. Edit `credentials.json`: remove the old token entry, add the new token with the same Gemini key
+3. Share the new token with the user — they update their Claude Code config
 
 ---
 
 ## Option 3: OAuth 2.1 (Claude Desktop)
 
-OAuth 2.1 lets users connect Claude Desktop through a browser sign-in flow instead of manually configuring a bearer token. The server acts as an OAuth authorization server, delegating identity verification to Google, GitHub, or Apple.
+OAuth 2.1 lets users connect Claude Desktop through a browser sign-in flow. After signing in with a provider, users are prompted to enter their Gemini API key. The server stores the OAuth identity and Gemini key mapping in the credentials file.
 
-| Aspect | Bearer Token | OAuth 2.1 |
+| Aspect | Credentials File | OAuth 2.1 |
 |---|---|---|
 | Client | Claude Code CLI | Claude Desktop GUI |
-| Credential management | Manual token distribution | Browser-based sign-in |
+| Credential management | Manual token or self-registration | Browser-based sign-in + Gemini key prompt |
 | Transport | HTTP or SSH tunnel | HTTPS only |
 | Token lifetime | Until rotated | 1 hour (access), 30 days (refresh) |
 | PKCE required | No | Yes (S256 only) |
@@ -340,53 +296,47 @@ You should see the login page with a "Sign in with Google" button (or whichever 
 
 ## Gemini API Key: Claude Code vs Claude Desktop
 
-The Gemini API key is required for image generation. How it's provided depends on which client you use.
+The Gemini API key is required for image generation. Every user provides their own key, which is stored in the credentials file alongside their identity.
 
 ### Claude Code (CLI)
 
-Claude Code lets you set custom HTTP headers in your MCP config. You can provide your Gemini API key per-user via the `X-Gemini-API-Key` header:
+Claude Code users provide their Gemini key through one of two methods:
+
+1. **Self-registration (first request):** Send both `Authorization: Bearer <token>` and `X-Gemini-API-Key: <key>` headers. The server writes the mapping to the credentials file. Subsequent requests only need the `Authorization` header.
+
+2. **Admin pre-registration:** An admin adds the token-to-key mapping directly in `credentials.json`.
 
 ```bash
 claude mcp add-json --scope user banana '{
   "type": "http",
   "url": "https://mcp.yourdomain.com:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>",
+    "Authorization": "Bearer <your-bearer-token>",
     "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-Each Claude Code user sends their own key. The server does not need `GEMINI_API_KEY` set in `.env` — the per-request header is sufficient.
+After the first successful request, the `X-Gemini-API-Key` header is no longer needed — the server looks up the key from the credentials file.
 
 ### Claude Desktop (GUI)
 
-Claude Desktop uses OAuth to authenticate. It controls the HTTP requests and **does not support custom headers** like `X-Gemini-API-Key`. This means Claude Desktop users cannot send their own Gemini key.
-
-For Claude Desktop, you **must** set `GEMINI_API_KEY` in the server's `.env` file. All Claude Desktop users share this server-side key.
-
-```bash
-# In .env on the production server
-GEMINI_API_KEY=AIza...
-```
+Claude Desktop users authenticate via OAuth. After signing in with a provider (Google, GitHub, or Apple), the user is prompted to enter their Gemini API key. The server stores the `provider:email` identity and Gemini key mapping in the credentials file.
 
 ### Summary
 
-| Client | How Gemini key is provided | Server `GEMINI_API_KEY` needed? |
+| Client | How Gemini key is provided | Credentials file entry |
 |---|---|---|
-| **Claude Code** | Per-user via `X-Gemini-API-Key` header | No — each user sends their own |
-| **Claude Desktop** | Server-side default in `.env` | **Yes** — all users share it |
-| **Both clients** | Header overrides server default | Yes — Claude Desktop needs it as fallback |
-
-If you support both Claude Code and Claude Desktop users, set `GEMINI_API_KEY` in `.env` for Claude Desktop, and Claude Code users can optionally override it with their own key via the header.
+| **Claude Code** | Self-registration via headers or admin pre-registration | `"bearer_token": "gemini_key"` |
+| **Claude Desktop** | Prompted during OAuth sign-in flow | `"provider:email": "gemini_key"` |
 
 ### How it works internally
 
-1. The HTTP middleware extracts `X-Gemini-API-Key` from the request header (if present).
-2. The key is registered with the output sanitizer — it never appears in responses or logs.
-3. The key is stored in the request context using a package-private context key.
-4. The tool handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user client or creates a new one.
-5. If no per-request key is provided, the default server-level client (from `GEMINI_API_KEY`) is used.
-6. If neither is available, the tool returns an error: `"no API key configured"`.
+1. The auth middleware identifies the client (OAuth token or bearer token from credentials file).
+2. The Gemini API key is looked up from the credentials file using the client's identity.
+3. For self-registration, both the bearer token and Gemini key are extracted from headers and written to the credentials file.
+4. The key is registered with the output sanitizer — it never appears in responses or logs.
+5. The tool handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user client or creates a new one.
+6. If no key is found for the client identity, the tool returns an error: `"no API key configured"`.
 
-For the Claude Code command that includes this header, see [Claude Code Integration](claude-code-integration.md).
+For the Claude Code command that includes these headers, see [Claude Code Integration](claude-code-integration.md).

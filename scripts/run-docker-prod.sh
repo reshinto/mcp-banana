@@ -4,7 +4,7 @@
 #
 # This script:
 #   1. Validates .env and MCP_DOMAIN
-#   2. Auto-populates OAUTH_BASE_URL, TLS paths, and MCP_AUTH_TOKEN in .env
+#   2. Auto-populates OAUTH_BASE_URL and TLS paths in .env
 #   3. Generates TLS certificates if missing (via certbot)
 #   4. Validates all required files exist before deployment
 #   5. Starts the production Docker stack
@@ -101,14 +101,6 @@ if [ "$CURRENT_CERT" != "$EXPECTED_CERT" ] || [ "$CURRENT_KEY" != "$EXPECTED_KEY
   UPDATED_ENV=true
 fi
 
-if grep -q "^MCP_AUTH_TOKEN=$" .env 2>/dev/null; then
-  GENERATED_TOKEN=$(openssl rand -hex 32)
-  sed -i.bak "s|^MCP_AUTH_TOKEN=$|MCP_AUTH_TOKEN=${GENERATED_TOKEN}|" .env && rm -f .env.bak
-  echo "[auto] MCP_AUTH_TOKEN generated: ${GENERATED_TOKEN}"
-  echo "       Save this token — you need it for your Claude Code MCP config."
-  UPDATED_ENV=true
-fi
-
 if [ "$UPDATED_ENV" = true ]; then
   # Re-source .env after updates
   set -a
@@ -117,9 +109,15 @@ if [ "$UPDATED_ENV" = true ]; then
   set +a
 fi
 
-if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
-  echo "[note] GEMINI_API_KEY is not set — clients must send X-Gemini-API-Key header"
+# Create credentials.json if it doesn't exist (mounted as a Docker volume).
+# The container runs as nonroot (uid 65532), so the file must be owned by
+# that uid for read/write access inside the container.
+if [ ! -f credentials.json ]; then
+  echo "{}" > credentials.json
+  echo "[note] Created credentials.json"
 fi
+sudo chown 65532:65532 credentials.json
+sudo chmod 600 credentials.json
 
 # --- Step 5: Check and generate TLS certificates ---
 # Note: /etc/letsencrypt is owned by root (mode 700), so all checks use sudo.

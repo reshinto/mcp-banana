@@ -8,7 +8,7 @@ A Go MCP server that gives Claude Code access to Google's Gemini image generatio
 
 ## Overview
 
-mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with bearer token or OAuth 2.1 authentication. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
+mcp-banana implements the Model Context Protocol (MCP) to expose four image generation tools to Claude Code. It runs locally as a stdio subprocess or remotely as an HTTP server with OAuth 2.1 or bearer token authentication. A unified credentials file (`MCP_CREDENTIALS_FILE`) maps client identities to Gemini API keys, supporting self-registration and hot-reload. A security-first architecture keeps secrets isolated, validates all input, and maps Gemini API errors to a safe allowlist before returning anything to Claude Code.
 
 ## Tools
 
@@ -25,7 +25,7 @@ Three modes are available. Pick one:
 
 ```bash
 git clone https://github.com/reshinto/mcp-banana.git && cd mcp-banana
-cp .env.example .env   # set GEMINI_API_KEY
+cp .env.example .env   # set MCP_CREDENTIALS_FILE (optional)
 ./scripts/run-local.sh
 ```
 
@@ -33,7 +33,7 @@ cp .env.example .env   # set GEMINI_API_KEY
 
 ```bash
 git clone https://github.com/reshinto/mcp-banana.git && cd mcp-banana
-cp .env.example .env   # set GEMINI_API_KEY and MCP_AUTH_TOKEN
+cp .env.example .env   # set MCP_CREDENTIALS_FILE
 ./scripts/run-docker-dev.sh
 ```
 

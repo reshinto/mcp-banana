@@ -9,6 +9,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/reshinto/mcp-banana/internal/config"
+	"github.com/reshinto/mcp-banana/internal/credentials"
 	"github.com/reshinto/mcp-banana/internal/gemini"
 	"github.com/reshinto/mcp-banana/internal/oauth"
 	"github.com/reshinto/mcp-banana/internal/tools"
@@ -16,9 +17,8 @@ import (
 
 // NewMCPServer creates and configures an MCP server with all four tool handlers
 // registered. Both HTTP and stdio transports share the returned instance.
-// clientCache is optional; when non-nil, per-request Gemini API keys extracted
-// from the X-Gemini-API-Key header are resolved to dedicated clients.
-func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
+// Per-request Gemini API keys are resolved from context by each handler via clientCache.
+func NewMCPServer(clientCache *gemini.ClientCache, maxImageBytes int) *mcpserver.MCPServer {
 	srv := mcpserver.NewMCPServer("mcp-banana", "1.0.0")
 
 	generateImageTool := mcp.NewTool("generate_image",
@@ -34,7 +34,7 @@ func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache,
 			mcp.Description("Optional aspect ratio for the generated image (e.g. '16:9', '1:1')."),
 		),
 	)
-	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(service, clientCache, maxImageBytes))
+	srv.AddTool(generateImageTool, tools.NewGenerateImageHandler(clientCache, maxImageBytes))
 
 	editImageTool := mcp.NewTool("edit_image",
 		mcp.WithDescription("Edit an existing image using text instructions and the Gemini image editing API."),
@@ -54,7 +54,7 @@ func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache,
 			mcp.Description("MIME type of the image (e.g. 'image/png', 'image/jpeg')."),
 		),
 	)
-	srv.AddTool(editImageTool, tools.NewEditImageHandler(service, clientCache, maxImageBytes))
+	srv.AddTool(editImageTool, tools.NewEditImageHandler(clientCache, maxImageBytes))
 
 	listModelsTool := mcp.NewTool("list_models",
 		mcp.WithDescription("List all available model aliases and their capabilities."),
@@ -79,10 +79,10 @@ func NewMCPServer(service gemini.GeminiService, clientCache *gemini.ClientCache,
 // WrapWithMiddleware applies the full middleware chain (panic recovery, auth,
 // rate limiting, concurrency semaphore, body size limit) to an arbitrary
 // http.Handler. Exported primarily for testing middleware in isolation.
-// Pass a non-nil oauthStore to enable OAuth access token validation as a
-// fallback authentication path alongside the static bearer token check.
-func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Handler, oauthStore *oauth.Store) http.Handler {
-	mw := newMiddleware(cfg, logger, oauthStore)
+// Pass a non-nil oauthStore to enable OAuth access token validation.
+// Pass a non-nil credStore to enable credentials-file-based auth and Gemini key resolution.
+func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Handler, oauthStore *oauth.Store, credStore *credentials.Store) http.Handler {
+	mw := newMiddleware(cfg, logger, oauthStore, credStore)
 	return mw.WrapHTTP(inner)
 }
 
@@ -91,7 +91,7 @@ func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Hand
 // transport. When oauthStore and providers are non-nil and OAuthBaseURL is set,
 // OAuth 2.1 discovery and flow endpoints are also registered. All routes except
 // /healthz pass through the full middleware chain.
-func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, logger *slog.Logger, oauthStore *oauth.Store, providers []oauth.ProviderConfig) http.Handler {
+func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, logger *slog.Logger, oauthStore *oauth.Store, providers []oauth.ProviderConfig, credStore *credentials.Store) http.Handler {
 	// Public routes — no auth, rate-limit, or body checks.
 	publicMux := http.NewServeMux()
 
@@ -106,8 +106,15 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 		publicMux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
 		publicMux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
 		publicMux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
-		publicMux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		publicMux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL, credStore))
 		publicMux.Handle("/token", oauth.NewTokenHandler(oauthStore))
+		publicMux.Handle("/gemini-key", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost {
+				oauth.NewGeminiKeySubmitHandler(oauthStore, credStore).ServeHTTP(writer, request)
+			} else {
+				oauth.NewGeminiKeyPromptHandler(oauthStore).ServeHTTP(writer, request)
+			}
+		}))
 	}
 
 	// Protected routes — behind auth, rate-limit, concurrency, body size.
@@ -119,7 +126,7 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 	)
 	protectedMux.Handle("/mcp", streamableHandler)
 
-	mw := newMiddleware(serverConfig, logger, oauthStore)
+	mw := newMiddleware(serverConfig, logger, oauthStore, credStore)
 	wrappedProtected := mw.WrapHTTP(protectedMux)
 
 	// Top-level mux: public routes are checked first; unmatched requests
@@ -132,6 +139,7 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 		topMux.Handle("/authorize", publicMux)
 		topMux.Handle("/callback", publicMux)
 		topMux.Handle("/token", publicMux)
+		topMux.Handle("/gemini-key", publicMux)
 	}
 	topMux.Handle("/", wrappedProtected)
 

@@ -50,7 +50,7 @@ GitHub Actions runs on pushes to `main`:
 - Use environment variables for all environment-specific configuration.
 - Provide a `.env.example` file listing all required variables without values.
 - Secrets in CI/CD must be stored in GitHub Actions secrets — not in repository files.
-- Required env vars: `GEMINI_API_KEY`, `MCP_AUTH_TOKEN` (HTTP transport), `PORT` (HTTP transport).
+- Required env vars: `MCP_CREDENTIALS_FILE` (defaults to `credentials.json`), OAuth provider secrets (if OAuth enabled).
 
 ### Image Tagging
 

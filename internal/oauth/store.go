@@ -14,25 +14,39 @@ type Client struct {
 
 // AuthCode represents a single-use OAuth 2.1 authorization code with PKCE support.
 type AuthCode struct {
-	Code          string
-	ClientID      string
-	RedirectURI   string
-	CodeChallenge string
-	ExpiresAt     time.Time
+	Code             string
+	ClientID         string
+	RedirectURI      string
+	CodeChallenge    string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
 }
 
 // TokenData holds an issued access token and its associated metadata.
 type TokenData struct {
-	Token     string
-	ClientID  string
-	ExpiresAt time.Time
+	Token            string
+	ClientID         string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
 }
 
 // RefreshData holds a single-use refresh token and its associated metadata.
 type RefreshData struct {
-	Token     string
-	ClientID  string
-	ExpiresAt time.Time
+	Token            string
+	ClientID         string
+	ProviderIdentity string // "provider:email" identity from upstream OAuth
+	ExpiresAt        time.Time
+}
+
+// GeminiKeySession stores the pending state between the OAuth callback and the
+// Gemini key submission form.
+type GeminiKeySession struct {
+	ProviderIdentity string
+	ClientID         string
+	RedirectURI      string
+	CodeChallenge    string
+	OriginalState    string
+	ExpiresAt        time.Time
 }
 
 // ProviderSession tracks an in-flight upstream OAuth provider authorization,
@@ -51,22 +65,24 @@ type ProviderSession struct {
 // authorization codes, access tokens, refresh tokens, and provider sessions.
 // Auth codes, refresh tokens, and provider sessions are single-use and expire by TTL.
 type Store struct {
-	mutex            sync.RWMutex
-	clients          map[string]*Client
-	authCodes        map[string]*AuthCode
-	accessTokens     map[string]*TokenData
-	refreshTokens    map[string]*RefreshData
-	providerSessions map[string]*ProviderSession
+	mutex             sync.RWMutex
+	clients           map[string]*Client
+	authCodes         map[string]*AuthCode
+	accessTokens      map[string]*TokenData
+	refreshTokens     map[string]*RefreshData
+	providerSessions  map[string]*ProviderSession
+	geminiKeySessions map[string]*GeminiKeySession
 }
 
 // NewStore creates and initializes an empty OAuth store.
 func NewStore() *Store {
 	return &Store{
-		clients:          make(map[string]*Client),
-		authCodes:        make(map[string]*AuthCode),
-		accessTokens:     make(map[string]*TokenData),
-		refreshTokens:    make(map[string]*RefreshData),
-		providerSessions: make(map[string]*ProviderSession),
+		clients:           make(map[string]*Client),
+		authCodes:         make(map[string]*AuthCode),
+		accessTokens:      make(map[string]*TokenData),
+		refreshTokens:     make(map[string]*RefreshData),
+		providerSessions:  make(map[string]*ProviderSession),
+		geminiKeySessions: make(map[string]*GeminiKeySession),
 	}
 }
 
@@ -112,6 +128,22 @@ func (store *Store) StoreAccessToken(tokenData *TokenData) {
 	store.mutex.Lock()
 	defer store.mutex.Unlock()
 	store.accessTokens[tokenData.Token] = tokenData
+}
+
+// GetAccessTokenData returns the full token data for the given access token,
+// or nil if the token does not exist or has expired. Unlike ValidateAccessToken,
+// this method returns the associated metadata including the provider identity.
+func (store *Store) GetAccessTokenData(token string) *TokenData {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	tokenData, exists := store.accessTokens[token]
+	if !exists {
+		return nil
+	}
+	if time.Now().After(tokenData.ExpiresAt) {
+		return nil
+	}
+	return tokenData
 }
 
 // ValidateAccessToken returns true if the token exists and has not expired.
@@ -171,6 +203,43 @@ func (store *Store) GetProviderSession(state string) *ProviderSession {
 	return session
 }
 
+// StoreGeminiKeySession persists a Gemini key session keyed by its token.
+func (store *Store) StoreGeminiKeySession(token string, session *GeminiKeySession) {
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	store.geminiKeySessions[token] = session
+}
+
+// ConsumeGeminiKeySession retrieves and removes a Gemini key session by token.
+// Returns nil if the session does not exist or has expired (single-use semantics).
+func (store *Store) ConsumeGeminiKeySession(token string) *GeminiKeySession {
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	session, exists := store.geminiKeySessions[token]
+	if !exists {
+		return nil
+	}
+	delete(store.geminiKeySessions, token)
+	if time.Now().After(session.ExpiresAt) {
+		return nil
+	}
+	return session
+}
+
+// PeekGeminiKeySession reads a session without consuming it.
+func (store *Store) PeekGeminiKeySession(token string) *GeminiKeySession {
+	store.mutex.RLock()
+	defer store.mutex.RUnlock()
+	session, exists := store.geminiKeySessions[token]
+	if !exists {
+		return nil
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return nil
+	}
+	return session
+}
+
 // CleanupExpired removes all expired entries from every map in the store.
 func (store *Store) CleanupExpired() {
 	now := time.Now()
@@ -194,6 +263,11 @@ func (store *Store) CleanupExpired() {
 	for state, session := range store.providerSessions {
 		if now.After(session.ExpiresAt) {
 			delete(store.providerSessions, state)
+		}
+	}
+	for token, session := range store.geminiKeySessions {
+		if now.After(session.ExpiresAt) {
+			delete(store.geminiKeySessions, token)
 		}
 	}
 }

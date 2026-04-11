@@ -225,16 +225,7 @@ Recommend a model alias based on a task description and optional priority.
 
 ### Recommendation Logic
 
-Priority is evaluated first. Keyword matching only applies in the `balanced` path.
-
-1. `priority=speed` — always return `nano-banana-original`
-2. `priority=quality` — always return `nano-banana-pro`
-3. `priority=balanced` or empty — scan `task_description` for keywords (case-insensitive, first match wins):
-   - **Pro keywords** (checked first): `professional`, `photorealistic`, `detailed`, `complex`, `final`
-   - **Speed keywords** (checked if no pro keyword matched): `quick`, `draft`, `sketch`, `iterate`, `batch`, `preview`
-   - **No keyword match** — return `nano-banana-2`
-
-Any unrecognized priority value (not `speed` or `quality`) is silently normalized to `balanced`.
+See [Model Recommendation Logic](models.md#recommendation-logic) for the detailed rules.
 
 ### Success Response
 

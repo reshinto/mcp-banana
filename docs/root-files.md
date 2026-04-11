@@ -116,26 +116,7 @@ cp .env.example .env
 # Edit .env and fill in values
 ```
 
-**Variable reference:**
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `MCP_DOMAIN` | Production only | — | Domain name for TLS cert path and OAuth redirect URLs |
-| `GEMINI_API_KEY` | Optional | — | Server-default Gemini API key; clients may override per-request via `X-Gemini-API-Key` header |
-| `MCP_AUTH_TOKEN` | Optional | — | Single bearer token for HTTP authentication; generate with `openssl rand -hex 32` or `make rotate-token` |
-| `MCP_AUTH_TOKENS_FILE` | Optional | — | Path to a file of bearer tokens (one per line); hot-reloaded on every request |
-| `MCP_LOG_LEVEL` | Optional | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
-| `MCP_RATE_LIMIT` | Optional | `30` | Max requests per minute (all models) |
-| `MCP_GLOBAL_CONCURRENCY` | Optional | `8` | Max simultaneous Gemini API calls |
-| `MCP_PRO_CONCURRENCY` | Optional | `3` | Max simultaneous calls to the Pro model (must be ≤ `MCP_GLOBAL_CONCURRENCY`) |
-| `MCP_MAX_IMAGE_BYTES` | Optional | `4194304` | Max decoded image size in bytes for `edit_image` |
-| `MCP_REQUEST_TIMEOUT_SECS` | Optional | `120` | Timeout per Gemini API call in seconds |
-| `OAUTH_BASE_URL` | Optional | auto | Base URL for OAuth endpoints; auto-populated from `MCP_DOMAIN` by the prod script |
-| `OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Optional | — | Google OAuth credentials |
-| `OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | Optional | — | GitHub OAuth credentials |
-| `OAUTH_APPLE_CLIENT_ID` / `_SECRET` | Optional | — | Apple Sign-In credentials |
-| `MCP_TLS_CERT_FILE` | Optional | — | Path to PEM certificate; enables HTTPS when both TLS vars are set |
-| `MCP_TLS_KEY_FILE` | Optional | — | Path to PEM private key |
+See [Setup and Operations — Environment Variable Reference](setup-and-operations.md#environment-variable-reference) for the complete list of environment variables, defaults, and descriptions.
 
 ---
 
@@ -281,7 +262,7 @@ All scripts in `scripts/` are self-contained bash scripts. They `cd` to the proj
 |---|---|---|
 | `run-local.sh` | Loads `.env`, runs `make build`, starts the binary in stdio mode | `./scripts/run-local.sh` |
 | `run-docker-dev.sh` | Validates `.env` exists, runs `docker compose up -d --build`, prints connection info | `./scripts/run-docker-dev.sh` |
-| `run-docker-prod.sh` | Full production deployment: validates `.env` and `MCP_DOMAIN`, auto-populates `OAUTH_BASE_URL`/TLS paths/`MCP_AUTH_TOKEN`, runs certbot if certs are missing, starts the production stack, waits for `/healthz` to return healthy | `./scripts/run-docker-prod.sh` |
+| `run-docker-prod.sh` | Full production deployment: validates `.env` and `MCP_DOMAIN`, auto-populates `OAUTH_BASE_URL`/TLS paths, creates `credentials.json` if missing, runs certbot if certs are missing, starts the production stack, waits for `/healthz` to return healthy | `./scripts/run-docker-prod.sh` |
 
 `run-docker-prod.sh` will not start Docker unless all prerequisites are satisfied. If anything fails, it prints a specific error and exits non-zero before modifying state.
 

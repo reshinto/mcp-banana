@@ -83,6 +83,60 @@ func setupServerEnv(test *testing.T) {
 	withMockClientFactory(test, nil)
 }
 
+// --- Default var function bodies ---
+
+// TestDefaultRegistryValidator exercises the production registryValidator var
+// so that its function body is included in coverage.
+func TestDefaultRegistryValidator(test *testing.T) {
+	if validationError := registryValidator(); validationError != nil {
+		test.Fatalf("default registry validator failed: %v", validationError)
+	}
+}
+
+// TestDefaultClientFactory exercises the production clientFactory var
+// so that its function body is included in coverage.
+func TestDefaultClientFactory(test *testing.T) {
+	client, factoryError := clientFactory(context.Background(), "test-key-for-coverage", 30, 2)
+	if factoryError != nil {
+		test.Fatalf("default client factory failed: %v", factoryError)
+	}
+	if client == nil {
+		test.Fatal("expected non-nil client")
+	}
+}
+
+// TestDefaultStdioServe exercises the production stdioServe var by providing
+// a closed stdin so ServeStdio returns immediately with an EOF/read error.
+func TestDefaultStdioServe(test *testing.T) {
+	// Replace os.Stdin with a pipe that is immediately closed, so ServeStdio
+	// reads EOF and returns instead of blocking.
+	originalStdin := os.Stdin
+	pipeReader, pipeWriter, pipeError := os.Pipe()
+	if pipeError != nil {
+		test.Fatalf("failed to create pipe: %v", pipeError)
+	}
+	_ = pipeWriter.Close() // close write end so reads get EOF
+	os.Stdin = pipeReader
+	test.Cleanup(func() { os.Stdin = originalStdin; _ = pipeReader.Close() })
+
+	// Create a minimal MCP server to pass to stdioServe.
+	mcpServer := mcpserver.NewMCPServer("test", "0.0.0")
+
+	// stdioServe may return an error (EOF) which is expected; we only care
+	// that the production closure body was executed for coverage.
+	_ = stdioServe(mcpServer)
+}
+
+// TestDefaultListenFunc exercises the production listenFunc var
+// so that its function body is included in coverage.
+func TestDefaultListenFunc(test *testing.T) {
+	listener, listenError := listenFunc("tcp", "127.0.0.1:0")
+	if listenError != nil {
+		test.Fatalf("default listen func failed: %v", listenError)
+	}
+	_ = listener.Close()
+}
+
 // --- main() ---
 
 func TestMain_CallsOsExit(test *testing.T) {
@@ -183,7 +237,7 @@ func TestRun_HealthCheckConnectionRefused(test *testing.T) {
 
 // --- Config loading ---
 
-func TestRun_NoAPIKey_StartsWithWarning(test *testing.T) {
+func TestRun_NoAPIKey_StartsSuccessfully(test *testing.T) {
 	withCleanSecrets(test)
 	test.Setenv("GEMINI_API_KEY", "")
 
@@ -200,8 +254,70 @@ func TestRun_NoAPIKey_StartsWithWarning(test *testing.T) {
 	if exitCode != 0 {
 		test.Fatalf("expected exit code 0 (server starts without API key), got %d; stderr: %s", exitCode, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "no GEMINI_API_KEY configured") {
-		test.Errorf("expected warning about missing API key, got: %q", stderr.String())
+}
+
+// --- Config load failure ---
+
+func TestRun_ConfigLoadFailure(test *testing.T) {
+	withCleanSecrets(test)
+	// Set an invalid log level to force config.Load() to fail.
+	test.Setenv("MCP_LOG_LEVEL", "INVALID_LEVEL_XYZ")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "failed to load config") {
+		test.Errorf("expected config error message, got: %q", stderr.String())
+	}
+}
+
+// --- Credentials file ---
+
+func TestRun_CredentialsFileLoadError(test *testing.T) {
+	withCleanSecrets(test)
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
+	// Point to a directory (not a file) to trigger credentials.NewStore failure.
+	test.Setenv("MCP_CREDENTIALS_FILE", "/dev/null/nonexistent")
+	withVerifiedRegistry(test)
+	withMockClientFactory(test, nil)
+	withMockStdio(test, nil)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "failed to load credentials file") {
+		test.Errorf("expected credentials file error, got: %q", stderr.String())
+	}
+}
+
+func TestRun_CredentialsFileLoadSuccess(test *testing.T) {
+	withCleanSecrets(test)
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
+
+	// Create a temporary valid credentials file.
+	credFile, fileError := os.CreateTemp(test.TempDir(), "creds-*.json")
+	if fileError != nil {
+		test.Fatalf("failed to create temp credentials file: %v", fileError)
+	}
+	_, _ = credFile.WriteString("{}")
+	_ = credFile.Close()
+
+	test.Setenv("MCP_CREDENTIALS_FILE", credFile.Name())
+	withVerifiedRegistry(test)
+	withMockClientFactory(test, nil)
+	withMockStdio(test, nil)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 0 {
+		test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
 	}
 }
 
@@ -230,23 +346,6 @@ func TestRun_RegistryValidationFails(test *testing.T) {
 }
 
 // --- Client factory error ---
-
-func TestRun_ClientFactoryError(test *testing.T) {
-	withCleanSecrets(test)
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
-	withVerifiedRegistry(test)
-	withMockClientFactory(test, errors.New("simulated client failure"))
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{}, &stdout, &stderr)
-	if exitCode != 1 {
-		test.Fatalf("expected exit code 1, got %d", exitCode)
-	}
-	if !strings.Contains(stderr.String(), "failed to create Gemini client") {
-		test.Errorf("expected client error, got: %q", stderr.String())
-	}
-}
 
 // --- Unknown transport ---
 
@@ -284,26 +383,6 @@ func TestResolveLogLevel(test *testing.T) {
 				test.Errorf("resolveLogLevel(%q) = %v, expected %v", testCase.input, result, testCase.expected)
 			}
 		})
-	}
-}
-
-// --- Auth token registration ---
-
-func TestRun_AuthTokenRegistered(test *testing.T) {
-	setupServerEnv(test)
-	test.Setenv("MCP_AUTH_TOKEN", "my-test-auth-token")
-	withMockStdio(test, nil)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
-	if exitCode != 0 {
-		test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
-	}
-
-	sanitized := security.SanitizeString("token is my-test-auth-token")
-	if strings.Contains(sanitized, "my-test-auth-token") {
-		test.Error("expected auth token to be registered as a secret and redacted")
 	}
 }
 
@@ -391,62 +470,6 @@ func TestRun_HTTPModeStartsAndShutdown(test *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		test.Fatal("timed out waiting for server shutdown")
-	}
-}
-
-func TestRun_HTTPNoAuthWarning(test *testing.T) {
-	setupServerEnv(test)
-	test.Setenv("MCP_AUTH_TOKEN", "")
-	test.Setenv("MCP_AUTH_TOKENS_FILE", "")
-
-	listener, listenError := net.Listen("tcp", "127.0.0.1:0")
-	if listenError != nil {
-		test.Fatalf("failed to create listener: %v", listenError)
-	}
-	listenerAddress := listener.Addr().String()
-	_ = listener.Close()
-
-	original := listenFunc
-	test.Cleanup(func() { listenFunc = original })
-	listenFunc = func(_, _ string) (net.Listener, error) {
-		return net.Listen("tcp", listenerAddress)
-	}
-
-	done := make(chan int, 1)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	go func() {
-		exitCode := run([]string{"--transport", "http", "--addr", listenerAddress}, &stdout, &stderr)
-		done <- exitCode
-	}()
-
-	// Wait for server to start.
-	httpClient := &http.Client{Timeout: 2 * time.Second}
-	healthURL := "http://" + listenerAddress + "/healthz"
-	for attempt := 0; attempt < 50; attempt++ {
-		resp, fetchError := httpClient.Get(healthURL)
-		if fetchError == nil {
-			_ = resp.Body.Close()
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	// Send SIGINT to shut down.
-	_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
-
-	select {
-	case exitCode := <-done:
-		if exitCode != 0 {
-			test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
-		}
-	case <-time.After(10 * time.Second):
-		test.Fatal("timed out waiting for server shutdown")
-	}
-
-	if !strings.Contains(stderr.String(), "auth is disabled") {
-		test.Errorf("expected auth warning in log output, got: %q", stderr.String())
 	}
 }
 

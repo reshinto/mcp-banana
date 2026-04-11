@@ -57,14 +57,33 @@ func stubImageResult() *gemini.ImageResult {
 	}
 }
 
+const testAPIKey = "test-api-key"
+
+// newTestClientCache creates a ClientCache suitable for use in tools tests.
+func newTestClientCache(test *testing.T) *gemini.ClientCache {
+	test.Helper()
+	return gemini.NewClientCache(30, 2)
+}
+
+// newCacheWithMock creates a ClientCache with the given mock service pre-seeded
+// for testAPIKey, and returns the cache and a context with the key set.
+func newCacheWithMock(test *testing.T, mock gemini.GeminiService) (*gemini.ClientCache, context.Context) {
+	test.Helper()
+	cache := newTestClientCache(test)
+	cache.SetClientForKey(testAPIKey, mock)
+	requestContext := gemini.WithAPIKey(context.Background(), testAPIKey)
+	return cache, requestContext
+}
+
 // --- generate_image tests ---
 
 func TestGenerateImageHandler_Success(test *testing.T) {
-	svc := &mockGeminiService{generateResult: stubImageResult()}
-	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{generateResult: stubImageResult()}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a sunny beach"})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -87,11 +106,12 @@ func TestGenerateImageHandler_Success(test *testing.T) {
 }
 
 func TestGenerateImageHandler_EmptyPrompt(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": ""})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -106,11 +126,12 @@ func TestGenerateImageHandler_EmptyPrompt(test *testing.T) {
 }
 
 func TestGenerateImageHandler_InvalidModel(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "hello", "model": "not-a-real-model"})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -125,11 +146,12 @@ func TestGenerateImageHandler_InvalidModel(test *testing.T) {
 }
 
 func TestGenerateImageHandler_GeminiError(test *testing.T) {
-	svc := &mockGeminiService{generateError: errors.New("quota exceeded somewhere")}
-	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{generateError: errors.New("quota exceeded somewhere")}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a portrait"})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -149,11 +171,12 @@ func TestGenerateImageHandler_GeminiError(test *testing.T) {
 }
 
 func TestGenerateImageHandler_InvalidAspectRatio(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewGenerateImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{"prompt": "a sunset", "aspect_ratio": "99:99"})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -164,6 +187,25 @@ func TestGenerateImageHandler_InvalidAspectRatio(test *testing.T) {
 	textContent := extractTextContent(test, result)
 	if !strings.Contains(textContent, "invalid_aspect_ratio") {
 		test.Errorf("expected error to contain 'invalid_aspect_ratio', got: %q", textContent)
+	}
+}
+
+func TestGenerateImageHandler_NoAPIKey(test *testing.T) {
+	cache := newTestClientCache(test)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
+
+	req := makeRequest(map[string]any{"prompt": "a sunset"})
+	result, err := handler(context.Background(), req)
+
+	if err != nil {
+		test.Fatalf("expected no Go error, got: %v", err)
+	}
+	if !result.IsError {
+		test.Fatal("expected error result when no API key in context")
+	}
+	textContent := extractTextContent(test, result)
+	if !strings.Contains(textContent, "no Gemini API key available") {
+		test.Errorf("expected no-key error message, got: %q", textContent)
 	}
 }
 
@@ -265,15 +307,16 @@ func TestRecommendModelHandler_EmptyTaskDescription(test *testing.T) {
 // --- edit_image tests ---
 
 func TestEditImageHandler_Success(test *testing.T) {
-	svc := &mockGeminiService{editResult: stubImageResult()}
-	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{editResult: stubImageResult()}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
 		"image":        validPNGBase64(),
 		"mime_type":    "image/png",
 	})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -293,15 +336,16 @@ func TestEditImageHandler_Success(test *testing.T) {
 }
 
 func TestEditImageHandler_EmptyInstructions(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "",
 		"image":        validPNGBase64(),
 		"mime_type":    "image/png",
 	})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -316,8 +360,9 @@ func TestEditImageHandler_EmptyInstructions(test *testing.T) {
 }
 
 func TestEditImageHandler_InvalidModel(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
@@ -325,7 +370,7 @@ func TestEditImageHandler_InvalidModel(test *testing.T) {
 		"image":        validPNGBase64(),
 		"mime_type":    "image/png",
 	})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -340,15 +385,16 @@ func TestEditImageHandler_InvalidModel(test *testing.T) {
 }
 
 func TestEditImageHandler_GeminiError(test *testing.T) {
-	svc := &mockGeminiService{editError: errors.New("internal failure")}
-	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{editError: errors.New("internal failure")}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it brighter",
 		"image":        validPNGBase64(),
 		"mime_type":    "image/png",
 	})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -363,15 +409,16 @@ func TestEditImageHandler_GeminiError(test *testing.T) {
 }
 
 func TestEditImageHandler_InvalidImage(test *testing.T) {
-	svc := &mockGeminiService{}
-	handler := NewEditImageHandler(svc, nil, 10*1024*1024)
+	mock := &mockGeminiService{}
+	cache, requestContext := newCacheWithMock(test, mock)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	req := makeRequest(map[string]any{
 		"instructions": "make it darker",
 		"image":        base64.StdEncoding.EncodeToString([]byte("not-an-image")),
 		"mime_type":    "image/png",
 	})
-	result, err := handler(context.Background(), req)
+	result, err := handler(requestContext, req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
@@ -385,44 +432,30 @@ func TestEditImageHandler_InvalidImage(test *testing.T) {
 	}
 }
 
-// newTestClientCache creates a ClientCache suitable for use in tools tests.
-// The default client is initialised with a fake API key; genai.NewClient is lazy
-// and does not validate the key at construction time.
-func newTestClientCache(test *testing.T) *gemini.ClientCache {
-	test.Helper()
-	defaultClient, clientError := gemini.NewClient(context.Background(), "default-fake-key", 30, 2)
-	if clientError != nil {
-		test.Fatalf("failed to create default test client: %v", clientError)
-	}
-	return gemini.NewClientCache(defaultClient, 30, 2)
-}
-
-// --- generate_image per-request API key tests ---
-
-// TestGenerateImageHandler_PerRequestKey_Success verifies that when clientCache is non-nil
-// and the context contains a per-request API key, the resolved client is used.
-// The test passes an invalid prompt so validation short-circuits before any network call.
-func TestGenerateImageHandler_PerRequestKey_Success(test *testing.T) {
+func TestEditImageHandler_NoAPIKey(test *testing.T) {
 	cache := newTestClientCache(test)
-	svc := &mockGeminiService{generateResult: stubImageResult()}
-	handler := NewGenerateImageHandler(svc, cache, 10*1024*1024)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
-	requestContext := gemini.WithAPIKey(context.Background(), "per-request-api-key")
-	req := makeRequest(map[string]any{"prompt": ""}) // empty prompt triggers validation error
-	result, err := handler(requestContext, req)
+	req := makeRequest(map[string]any{
+		"instructions": "make it brighter",
+		"image":        validPNGBase64(),
+		"mime_type":    "image/png",
+	})
+	result, err := handler(context.Background(), req)
 
 	if err != nil {
 		test.Fatalf("expected no Go error, got: %v", err)
 	}
-	// Validation fails after the resolved client is set, confirming the cache path was taken.
 	if !result.IsError {
-		test.Fatal("expected error result from validation after cache resolution")
+		test.Fatal("expected error result when no API key in context")
 	}
 	textContent := extractTextContent(test, result)
-	if !strings.Contains(textContent, "invalid_prompt") {
-		test.Errorf("expected invalid_prompt validation error, got: %q", textContent)
+	if !strings.Contains(textContent, "no Gemini API key available") {
+		test.Errorf("expected no-key error message, got: %q", textContent)
 	}
 }
+
+// --- generate_image per-request API key tests ---
 
 // TestGenerateImageHandler_PerRequestKey_CacheError verifies that when GetClient returns an
 // error the handler returns a safe error result without exposing internal details.
@@ -433,8 +466,7 @@ func TestGenerateImageHandler_PerRequestKey_CacheError(test *testing.T) {
 	})
 	defer restore()
 
-	svc := &mockGeminiService{generateResult: stubImageResult()}
-	handler := NewGenerateImageHandler(svc, cache, 10*1024*1024)
+	handler := NewGenerateImageHandler(cache, 10*1024*1024)
 
 	requestContext := gemini.WithAPIKey(context.Background(), "failing-api-key")
 	req := makeRequest(map[string]any{"prompt": "a sunny beach"})
@@ -447,7 +479,7 @@ func TestGenerateImageHandler_PerRequestKey_CacheError(test *testing.T) {
 		test.Fatal("expected error result when cache returns error")
 	}
 	textContent := extractTextContent(test, result)
-	if !strings.Contains(textContent, "failed to initialize client for provided API key") {
+	if !strings.Contains(textContent, "failed to initialize Gemini client") {
 		test.Errorf("expected safe cache error message, got: %q", textContent)
 	}
 	if strings.Contains(textContent, "simulated factory failure") {
@@ -456,35 +488,6 @@ func TestGenerateImageHandler_PerRequestKey_CacheError(test *testing.T) {
 }
 
 // --- edit_image per-request API key tests ---
-
-// TestEditImageHandler_PerRequestKey_Success verifies that when clientCache is non-nil
-// and the context contains a per-request API key, the resolved client is used.
-// The test passes empty instructions so validation short-circuits before any network call.
-func TestEditImageHandler_PerRequestKey_Success(test *testing.T) {
-	cache := newTestClientCache(test)
-	svc := &mockGeminiService{editResult: stubImageResult()}
-	handler := NewEditImageHandler(svc, cache, 10*1024*1024)
-
-	requestContext := gemini.WithAPIKey(context.Background(), "per-request-api-key")
-	req := makeRequest(map[string]any{
-		"instructions": "", // empty instructions triggers validation error
-		"image":        validPNGBase64(),
-		"mime_type":    "image/png",
-	})
-	result, err := handler(requestContext, req)
-
-	if err != nil {
-		test.Fatalf("expected no Go error, got: %v", err)
-	}
-	// Validation fails after the resolved client is set, confirming the cache path was taken.
-	if !result.IsError {
-		test.Fatal("expected error result from validation after cache resolution")
-	}
-	textContent := extractTextContent(test, result)
-	if !strings.Contains(textContent, "invalid_prompt") {
-		test.Errorf("expected invalid_prompt validation error, got: %q", textContent)
-	}
-}
 
 // TestEditImageHandler_PerRequestKey_CacheError verifies that when GetClient returns an
 // error the handler returns a safe error result without exposing internal details.
@@ -495,8 +498,7 @@ func TestEditImageHandler_PerRequestKey_CacheError(test *testing.T) {
 	})
 	defer restore()
 
-	svc := &mockGeminiService{editResult: stubImageResult()}
-	handler := NewEditImageHandler(svc, cache, 10*1024*1024)
+	handler := NewEditImageHandler(cache, 10*1024*1024)
 
 	requestContext := gemini.WithAPIKey(context.Background(), "failing-api-key")
 	req := makeRequest(map[string]any{
@@ -513,7 +515,7 @@ func TestEditImageHandler_PerRequestKey_CacheError(test *testing.T) {
 		test.Fatal("expected error result when cache returns error")
 	}
 	textContent := extractTextContent(test, result)
-	if !strings.Contains(textContent, "failed to initialize client for provided API key") {
+	if !strings.Contains(textContent, "failed to initialize Gemini client") {
 		test.Errorf("expected safe cache error message, got: %q", textContent)
 	}
 	if strings.Contains(textContent, "simulated factory failure") {

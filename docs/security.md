@@ -15,16 +15,14 @@ See [architecture.md](architecture.md) for security boundary diagrams and the mi
 | Claude Code to mcp-banana (stdio) | Implicit: local process ownership |
 | Claude Code to mcp-banana (HTTP, static token) | Bearer token in `Authorization` header |
 | Claude Desktop to mcp-banana (HTTP, OAuth) | OAuth 2.1 access token in `Authorization` header |
-| mcp-banana to Gemini API | `GEMINI_API_KEY` in SDK configuration |
+| mcp-banana to Gemini API | Per-user Gemini API key from credentials file |
 | mcp-banana to logs / responses | Sanitizer redacts secrets before any output |
 
 ### What Is Protected
 
-- **Google Gemini API key** — never included in any tool response, log line, or error message
 - **Per-user Gemini API keys** — registered with the sanitizer on extraction; never logged
 - **Internal Gemini model IDs** — only the public Nano Banana aliases are exposed to clients
 - **Raw Gemini API errors** — translated to one of five safe error codes; raw SDK text is discarded
-- **Static bearer token** — redacted from all log output
 - **OAuth provider client secrets** — registered with the sanitizer at startup; redacted from all output
 
 ### What Is Not Protected
@@ -37,7 +35,7 @@ See [architecture.md](architecture.md) for security boundary diagrams and the mi
 
 | Control | Where Applied | Configurable |
 |---|---|---|
-| Bearer token auth | HTTP middleware, every request except `/healthz` | `MCP_AUTH_TOKEN` / `MCP_AUTH_TOKENS_FILE` |
+| Bearer token auth | HTTP middleware, every request except `/healthz` | `MCP_CREDENTIALS_FILE` |
 | OAuth access token auth | HTTP middleware fallback (after static token check) | `OAUTH_*` env vars + `OAUTH_BASE_URL` |
 | Rate limiting | HTTP middleware | `MCP_RATE_LIMIT` |
 | Global concurrency limit | HTTP middleware | `MCP_GLOBAL_CONCURRENCY` |
@@ -61,8 +59,6 @@ See [architecture.md](architecture.md) for security boundary diagrams and the mi
 At startup, the following values are registered with the sanitizer:
 
 ```go
-security.RegisterSecret(serverConfig.GeminiAPIKey)
-security.RegisterSecret(serverConfig.AuthToken)            // if non-empty
 security.RegisterSecret(serverConfig.OAuthGoogleClientSecret)
 security.RegisterSecret(serverConfig.OAuthGitHubClientSecret)
 security.RegisterSecret(serverConfig.OAuthAppleClientSecret)
@@ -175,9 +171,11 @@ The `/authorize` handler validates the requested `redirect_uri` against the allo
 
 Short-lived access tokens limit the exposure window if a token is intercepted. Refresh tokens are rotated on every use.
 
+For the full authorization flow context, see [Authentication — OAuth 2.1](authentication.md#option-3-oauth-21-claude-desktop).
+
 ### Provider Secret Sanitization
 
-All `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret()` at startup, using the same mechanism as `GEMINI_API_KEY` and `MCP_AUTH_TOKEN`. This ensures they are redacted from logs and error messages even if they appear in unexpected code paths.
+All `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret()` at startup. This ensures they are redacted from logs and error messages even if they appear in unexpected code paths.
 
 ### TLS Requirements
 

@@ -9,22 +9,18 @@ import (
 	"google.golang.org/genai"
 )
 
-// newTestClientCache creates a ClientCache with a pre-built test default client.
+// newTestClientCache creates a ClientCache for testing.
 func newTestClientCache(timeoutSecs int, proConcurrency int) *ClientCache {
-	defaultClient := newTestClient(&mockContentGenerator{})
-	return NewClientCache(defaultClient, timeoutSecs, proConcurrency)
+	return NewClientCache(timeoutSecs, proConcurrency)
 }
 
-// TestClientCache_DefaultClient verifies that an empty key returns the default client.
-func TestClientCache_DefaultClient(test *testing.T) {
+// TestClientCache_EmptyKeyReturnsError verifies that an empty key returns an error.
+func TestClientCache_EmptyKeyReturnsError(test *testing.T) {
 	cache := newTestClientCache(30, 2)
 
-	result, clientError := cache.GetClient(context.Background(), "")
-	if clientError != nil {
-		test.Fatalf("unexpected error: %v", clientError)
-	}
-	if result != cache.defaultClient {
-		test.Error("expected default client for empty key")
+	_, clientError := cache.GetClient(context.Background(), "")
+	if clientError == nil {
+		test.Fatal("expected error for empty key")
 	}
 }
 
@@ -38,9 +34,6 @@ func TestClientCache_CustomKey(test *testing.T) {
 	}
 	if result == nil {
 		test.Fatal("expected non-nil client for custom key")
-	}
-	if result == cache.defaultClient {
-		test.Error("expected a different client for custom key, not the default")
 	}
 }
 
@@ -85,7 +78,7 @@ func TestClientCache_ConcurrentSameKey(test *testing.T) {
 	cache := newTestClientCache(30, 2)
 
 	const goroutineCount = 20
-	results := make([]*Client, goroutineCount)
+	results := make([]GeminiService, goroutineCount)
 	errs := make([]error, goroutineCount)
 	done := make(chan struct{})
 	start := make(chan struct{})
@@ -103,7 +96,7 @@ func TestClientCache_ConcurrentSameKey(test *testing.T) {
 		<-done
 	}
 
-	var firstResult *Client
+	var firstResult GeminiService
 	for goroutineIndex := 0; goroutineIndex < goroutineCount; goroutineIndex++ {
 		if errs[goroutineIndex] != nil {
 			test.Errorf("goroutine %d: unexpected error: %v", goroutineIndex, errs[goroutineIndex])
@@ -156,7 +149,7 @@ func TestClientCache_DoubleCheckUnderWriteLock(test *testing.T) {
 
 	const sharedKey = "double-check-key"
 	type result struct {
-		client *Client
+		client GeminiService
 		err    error
 	}
 	results := make(chan result, 2)
@@ -198,5 +191,52 @@ func TestClientCache_DoubleCheckUnderWriteLock(test *testing.T) {
 	}
 	if firstResult.client != secondResult.client {
 		test.Error("expected both goroutines to return the same client pointer")
+	}
+}
+
+// mockGeminiService is a minimal test double for GeminiService used in cache tests.
+type mockGeminiService struct{}
+
+func (mock *mockGeminiService) GenerateImage(_ context.Context, _ string, _ string, _ GenerateOptions) (*ImageResult, error) {
+	return nil, nil
+}
+
+func (mock *mockGeminiService) EditImage(_ context.Context, _ string, _ []byte, _ string, _ string) (*ImageResult, error) {
+	return nil, nil
+}
+
+// TestClientCache_SetClientForKey verifies that SetClientForKey injects a client
+// into the cache so that subsequent GetClient calls for the same key return it.
+func TestClientCache_SetClientForKey(test *testing.T) {
+	cache := newTestClientCache(30, 2)
+
+	injected := &mockGeminiService{}
+	cache.SetClientForKey("injected-key", injected)
+
+	retrieved, clientError := cache.GetClient(context.Background(), "injected-key")
+	if clientError != nil {
+		test.Fatalf("unexpected error: %v", clientError)
+	}
+	if retrieved != injected {
+		test.Error("expected GetClient to return the injected mock client")
+	}
+}
+
+// TestClientCache_SetClientForKey_Overwrites verifies that SetClientForKey
+// replaces an existing cached client for the same key.
+func TestClientCache_SetClientForKey_Overwrites(test *testing.T) {
+	cache := newTestClientCache(30, 2)
+
+	first := &mockGeminiService{}
+	second := &mockGeminiService{}
+	cache.SetClientForKey("overwrite-key", first)
+	cache.SetClientForKey("overwrite-key", second)
+
+	retrieved, clientError := cache.GetClient(context.Background(), "overwrite-key")
+	if clientError != nil {
+		test.Fatalf("unexpected error: %v", clientError)
+	}
+	if retrieved != second {
+		test.Error("expected GetClient to return the second (overwritten) mock client")
 	}
 }

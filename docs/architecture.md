@@ -95,7 +95,7 @@ The chain is defined in `internal/server/middleware.go` and applied to all HTTP 
 
 1. **Panic recovery** — a deferred function catches any unhandled panics and returns `500 {"error":"server_error"}` instead of crashing the process.
 2. **Health check bypass** — requests to `/healthz` skip all remaining middleware and return `{"status":"ok"}` immediately.
-3. **Bearer / OAuth auth** — checks `Authorization: Bearer <token>` in order: (a) tokens file (`MCP_AUTH_TOKENS_FILE`, re-read on every request for hot-reload), (b) single env var token (`MCP_AUTH_TOKEN`), (c) OAuth access token via `Store.ValidateAccessToken`. If no auth is configured at all, all requests pass through (SSH tunnel expected for network-level security).
+3. **Bearer / OAuth auth** — checks `Authorization: Bearer <token>` in order: (a) credentials file lookup (`MCP_CREDENTIALS_FILE`, maps tokens to Gemini API keys), (b) OAuth access token via `Store.ValidateAccessToken` (resolves provider identity to Gemini key in credentials file), (c) self-registration (unknown token + valid `X-Gemini-API-Key` header registers a new entry). If no auth is configured at all, all requests pass through (SSH tunnel expected for network-level security).
 4. **X-Gemini-API-Key extraction** — if the `X-Gemini-API-Key` header is present, the value is registered with `security.RegisterSecret` (to ensure it is redacted from logs) and stored in the request context via `gemini.WithAPIKey`. This enables per-user Gemini client resolution downstream.
 5. **Rate limiting** — a token bucket limiter enforces `MCP_RATE_LIMIT` requests per minute. Excess requests receive `429` with a `Retry-After` header.
 6. **Global concurrency semaphore** — limits simultaneous in-flight requests to `MCP_GLOBAL_CONCURRENCY`. Requests that cannot acquire a slot within 5 seconds receive `503 {"error":"server_busy"}`.
@@ -123,7 +123,7 @@ The server supports per-request Gemini API keys to allow multi-user deployments 
 2. The middleware extracts the key, registers it as a secret with the sanitizer, and stores it in the request context.
 3. The tool handler calls `gemini.APIKeyFromContext(ctx)` to retrieve the key.
 4. The handler calls `clientCache.GetClient(ctx, apiKey)`, which returns a cached per-user `*Client` or creates and caches a new one.
-5. If no per-request key is provided, the default server-level client (initialized from `GEMINI_API_KEY`) is used.
+5. If no per-request key is available, the request is rejected with an error.
 
 All per-user clients share the same `timeoutSecs` and `proConcurrency` settings from server config.
 
@@ -162,7 +162,7 @@ The startup sequence in `cmd/mcp-banana/main.go` follows a strict fail-fast orde
 1. **Flag parsing** — `--transport`, `--addr`, `--healthcheck`, `--version`
 2. **Config loading** — `config.Load()` reads and validates all environment variables; exits on any missing or malformed value
 3. **Registry validation** — `gemini.ValidateRegistryAtStartup()` checks for sentinel model IDs; exits if any are found
-4. **Secret registration** — `GEMINI_API_KEY`, `MCP_AUTH_TOKEN`, and all `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret`
+4. **Secret registration** — all `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret`
 5. **Logger initialization** — structured JSON logger created with the configured log level (output to stderr)
 6. **Gemini client creation** — default `*gemini.Client` and `*gemini.ClientCache` initialized with the API key, timeout, and pro-model semaphore
 7. **OAuth setup** — active providers assembled from config; if any are present, an `oauth.Store` is created and a background cleanup goroutine is started

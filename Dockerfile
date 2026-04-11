@@ -23,6 +23,8 @@ COPY --from=builder /build/mcp-banana /usr/local/bin/mcp-banana
 # Run as non-root user (distroless:nonroot provides uid 65532)
 USER nonroot:nonroot
 
+WORKDIR /data
+
 EXPOSE 8847
 
 ENTRYPOINT ["/usr/local/bin/mcp-banana"]

@@ -34,9 +34,10 @@ rotate-token:
 	@NEW_TOKEN=$$(openssl rand -hex 32); \
 	echo "New token: $$NEW_TOKEN"; \
 	echo ""; \
-	echo "Step 1: Update MCP_AUTH_TOKEN on the server:"; \
-	echo "  SSH into the server, edit /opt/mcp-banana/.env, set MCP_AUTH_TOKEN=$$NEW_TOKEN"; \
-	echo "  Then restart: docker compose restart"; \
+	echo "Step 1: Add the token to the credentials file on the server:"; \
+	echo "  SSH into the server, edit the file at MCP_CREDENTIALS_FILE (e.g. /opt/mcp-banana/credentials.json)"; \
+	echo "  Add an entry: {\"$$NEW_TOKEN\": \"<gemini-api-key>\"}"; \
+	echo "  The credentials file is hot-reloaded — no restart required."; \
 	echo ""; \
 	echo "Step 2: Update your Claude Code config with the new token:"; \
 	echo "  claude mcp add-json --scope user banana '{\"type\":\"http\",\"url\":\"http://localhost:8847/mcp\",\"headers\":{\"Authorization\":\"Bearer $$NEW_TOKEN\"}}'"

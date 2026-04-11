@@ -73,13 +73,7 @@ cd mcp-banana
 cp .env.example .env
 ```
 
-Open `.env` and set your Gemini API key:
-
-```
-GEMINI_API_KEY=AIza...
-```
-
-All other variables are optional for this mode.
+All variables are optional for stdio mode. The default `MCP_CREDENTIALS_FILE=credentials.json` is sufficient. Each Claude Code user provides their own Gemini API key via the `X-Gemini-API-Key` header or through self-registration.
 
 **3. Build and start the server.**
 
@@ -122,18 +116,13 @@ cd mcp-banana
 cp .env.example .env
 ```
 
-Set the required variables:
+Set the credentials file path (or use the default):
 
 ```
-GEMINI_API_KEY=AIza...
-MCP_AUTH_TOKEN=<your-token>
+MCP_CREDENTIALS_FILE=credentials.json
 ```
 
-Generate a token if you do not have one:
-
-```bash
-openssl rand -hex 32
-```
+Users self-register by sending both `Authorization: Bearer <token>` and `X-Gemini-API-Key: <key>` headers on their first request. Or pre-populate `credentials.json` with token-to-key mappings.
 
 **3. Start the server.**
 
@@ -232,9 +221,9 @@ sudo certbot certonly --manual --preferred-challenges dns -d mcp.yourdomain.com
 
 ```
 Please deploy a DNS TXT record under the name
-_acme-challenge.mcp.yourdomain.com with the following value:
+_acme-challenge.mcp.yourdomain.com with the certbot provided value:
 
-xYz123AbCdEfGhIjKlMnOpQrStUvWxYz1234567890
+somerandomgeneratedvalue...
 
 Before continuing, verify the record is deployed.
 ```
@@ -245,7 +234,7 @@ Before continuing, verify the record is deployed.
 |---|---|---|
 | **Type** | `TXT` | TXT |
 | **Name** / **Host** | `_acme-challenge.mcp` | `_acme-challenge.mcp` |
-| **Value** / **Content** | Copy-paste the exact value certbot showed | `xYz123AbCdEfGhIjKlMnOpQrStUvWxYz1234567890` |
+| **Value** / **Content** | Copy-paste the exact value certbot showed | `somerandomgeneratedvalue...` |
 | **TTL** | `300` (or "Automatic") | 300 |
 
 > **Important:** The value changes every time you run certbot. Always copy the value from the current certbot output — do not reuse values from previous attempts.
@@ -314,11 +303,8 @@ MCP_DOMAIN=mcp.yourdomain.com
 MCP_TLS_CERT_FILE=
 MCP_TLS_KEY_FILE=
 
-# Bearer token auth (generate with: openssl rand -hex 32)
-MCP_AUTH_TOKEN=<paste-your-generated-token>
-
-# Default Gemini key (optional — clients can send X-Gemini-API-Key instead)
-GEMINI_API_KEY=
+# Credentials file (maps bearer tokens / OAuth identities to Gemini API keys)
+MCP_CREDENTIALS_FILE=credentials.json
 
 # Server tuning (defaults are fine for most setups)
 MCP_LOG_LEVEL=info
@@ -333,7 +319,7 @@ MCP_REQUEST_TIMEOUT_SECS=120
 
 ### Step 5 — Configure OAuth (optional)
 
-Skip this step if you only need bearer token auth or per-user API keys. OAuth enables Claude Desktop to authenticate users through a browser sign-in flow.
+Skip this step if you only need credentials file auth. OAuth enables Claude Desktop to authenticate users through a browser sign-in flow.
 
 Add OAuth credentials to `.env` — see [Authentication](authentication.md#option-3-oauth-21-claude-desktop) for full provider registration steps and the OAuth flow explanation.
 
@@ -364,8 +350,7 @@ The script automatically:
 1. Validates `.env` and `MCP_DOMAIN`
 2. Detects Docker Compose V1 or V2
 3. Auto-populates `OAUTH_BASE_URL`, `MCP_TLS_CERT_FILE`, `MCP_TLS_KEY_FILE` in `.env` from `MCP_DOMAIN`
-4. Auto-generates `MCP_AUTH_TOKEN` if empty
-5. Installs certbot and generates TLS certificates if missing (interactive DNS challenge)
+4. Installs certbot and generates TLS certificates if missing (interactive DNS challenge)
 6. Fixes Let's Encrypt file permissions so the container can read the certs (the container runs as `nonroot`, but Let's Encrypt sets `privkey.pem` to root-only by default)
 7. Stops any existing container to free port 8847
 8. Builds and starts the Docker container with the production overlay
@@ -432,9 +417,7 @@ All variables are loaded from `.env` at startup. The server exits immediately wi
 
 | Variable | Required | Default | Type | Description |
 |---|---|---|---|---|
-| `GEMINI_API_KEY` | No | — | string | Google Gemini API key. Starts with `AIza`. If not set, clients must send their own key via `X-Gemini-API-Key` header. |
-| `MCP_AUTH_TOKEN` | No | — | string | Single bearer token for HTTP auth. Every HTTP request must include `Authorization: Bearer <token>`. Generate with `openssl rand -hex 32`. Not used in stdio mode. |
-| `MCP_AUTH_TOKENS_FILE` | No | — | path | Path to a file containing bearer tokens, one per line. Lines starting with `#` and empty lines are ignored. Hot-reloaded on every request — add or remove tokens without restarting. If both `MCP_AUTH_TOKEN` and `MCP_AUTH_TOKENS_FILE` are set, a request matching either is accepted. |
+| `MCP_CREDENTIALS_FILE` | No | `credentials.json` | path | Path to the unified credentials JSON file. Maps bearer tokens and OAuth identities (`provider:email`) to Gemini API keys. Hot-reloaded on every request. Auto-created with `{}` if missing. Supports self-registration: clients send `Authorization: Bearer <token>` and `X-Gemini-API-Key: <key>` on first request. |
 | `MCP_DOMAIN` | No | — | string | Domain name used by `run-docker-prod.sh` to locate the TLS certificate directory at `/etc/letsencrypt/live/<MCP_DOMAIN>`. Example: `mcp.yourdomain.com`. |
 | `MCP_LOG_LEVEL` | No | `info` | enum | Log verbosity. One of: `debug`, `info`, `warn`, `error`. Logs are JSON-formatted and written to stderr. |
 | `MCP_RATE_LIMIT` | No | `30` | int | Maximum requests per minute across all models. Must be a positive integer. |
