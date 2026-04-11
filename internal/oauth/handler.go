@@ -56,13 +56,26 @@ func NewAuthorizeHandler(store *Store, providers []ProviderConfig, baseURL strin
 		}
 
 		clientID := queryParams.Get("client_id")
+		redirectURI := queryParams.Get("redirect_uri")
+
 		client := store.GetClient(clientID)
 		if client == nil {
-			writeJSONError(writer, "invalid_client", http.StatusBadRequest)
-			return
+			// Auto-register unknown clients. MCP clients like Claude Desktop
+			// may cache their client_id across server restarts, but the
+			// in-memory store loses registrations on restart. Rather than
+			// rejecting with invalid_client, register on the fly.
+			if clientID == "" || redirectURI == "" {
+				writeJSONError(writer, "invalid_client", http.StatusBadRequest)
+				return
+			}
+			client = &Client{
+				ClientID:     clientID,
+				ClientName:   "auto-registered",
+				RedirectURIs: []string{redirectURI},
+			}
+			store.RegisterClient(client)
 		}
 
-		redirectURI := queryParams.Get("redirect_uri")
 		if !uriInList(redirectURI, client.RedirectURIs) {
 			writeJSONError(writer, "invalid_redirect_uri", http.StatusBadRequest)
 			return

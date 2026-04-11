@@ -94,7 +94,7 @@ func TestAuthorizeHandler_RendersLoginPage(test *testing.T) {
 	}
 }
 
-func TestAuthorizeHandler_InvalidClientID(test *testing.T) {
+func TestAuthorizeHandler_AutoRegistersUnknownClient(test *testing.T) {
 	store := NewStore()
 	handler := NewAuthorizeHandler(store, nil, "https://mcp.example.com")
 
@@ -110,8 +110,35 @@ func TestAuthorizeHandler_InvalidClientID(test *testing.T) {
 
 	handler.ServeHTTP(recorder, request)
 
+	// Auto-registration should succeed — renders login page (200), not 400
+	if recorder.Code != http.StatusOK {
+		test.Errorf("expected status 200 (auto-registered), got %d", recorder.Code)
+	}
+	// Verify the client was registered
+	client := store.GetClient("nonexistent")
+	if client == nil {
+		test.Fatal("expected client to be auto-registered")
+	}
+}
+
+func TestAuthorizeHandler_RejectsEmptyClientID(test *testing.T) {
+	store := NewStore()
+	handler := NewAuthorizeHandler(store, nil, "https://mcp.example.com")
+
+	request := httptest.NewRequest(http.MethodGet, "/authorize?"+
+		"response_type=code"+
+		"&client_id="+
+		"&redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback"+
+		"&state=random-state"+
+		"&code_challenge=abc123"+
+		"&code_challenge_method=S256",
+		nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
 	if recorder.Code != http.StatusBadRequest {
-		test.Errorf("expected status 400, got %d", recorder.Code)
+		test.Errorf("expected status 400 for empty client_id, got %d", recorder.Code)
 	}
 }
 
