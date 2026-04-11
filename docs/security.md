@@ -171,6 +171,8 @@ The `/authorize` handler validates the requested `redirect_uri` against the allo
 
 Short-lived access tokens limit the exposure window if a token is intercepted. Refresh tokens are rotated on every use.
 
+For the full authorization flow context, see [Authentication — OAuth 2.1](authentication.md#option-3-oauth-21-claude-desktop).
+
 ### Provider Secret Sanitization
 
 All `OAUTH_*_CLIENT_SECRET` values are registered with `security.RegisterSecret()` at startup. This ensures they are redacted from logs and error messages even if they appear in unexpected code paths.

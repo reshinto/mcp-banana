@@ -116,24 +116,7 @@ cp .env.example .env
 # Edit .env and fill in values
 ```
 
-**Variable reference:**
-
-| Variable | Required | Default | Purpose |
-|---|---|---|---|
-| `MCP_DOMAIN` | Production only | — | Domain name for TLS cert path and OAuth redirect URLs |
-| `MCP_CREDENTIALS_FILE` | Optional | — | Path to a JSON file mapping bearer tokens and OAuth identities to Gemini API keys; hot-reloaded on every request |
-| `MCP_LOG_LEVEL` | Optional | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
-| `MCP_RATE_LIMIT` | Optional | `30` | Max requests per minute (all models) |
-| `MCP_GLOBAL_CONCURRENCY` | Optional | `8` | Max simultaneous Gemini API calls |
-| `MCP_PRO_CONCURRENCY` | Optional | `3` | Max simultaneous calls to the Pro model (must be ≤ `MCP_GLOBAL_CONCURRENCY`) |
-| `MCP_MAX_IMAGE_BYTES` | Optional | `4194304` | Max decoded image size in bytes for `edit_image` |
-| `MCP_REQUEST_TIMEOUT_SECS` | Optional | `120` | Timeout per Gemini API call in seconds |
-| `OAUTH_BASE_URL` | Optional | auto | Base URL for OAuth endpoints; auto-populated from `MCP_DOMAIN` by the prod script |
-| `OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | Optional | — | Google OAuth credentials |
-| `OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | Optional | — | GitHub OAuth credentials |
-| `OAUTH_APPLE_CLIENT_ID` / `_SECRET` | Optional | — | Apple Sign-In credentials |
-| `MCP_TLS_CERT_FILE` | Optional | — | Path to PEM certificate; enables HTTPS when both TLS vars are set |
-| `MCP_TLS_KEY_FILE` | Optional | — | Path to PEM private key |
+See [Setup and Operations — Environment Variable Reference](setup-and-operations.md#environment-variable-reference) for the complete list of environment variables, defaults, and descriptions.
 
 ---
 

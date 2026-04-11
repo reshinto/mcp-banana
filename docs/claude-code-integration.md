@@ -13,6 +13,17 @@ The repository includes a `.mcp.json` with a project-scoped stdio configuration.
 
 ---
 
+## Self-Registration
+
+When connecting over HTTP with a bearer token, send both headers on the first request:
+
+- `Authorization: Bearer <your-bearer-token>` — your identity in the credentials file
+- `X-Gemini-API-Key: <your-gemini-api-key>` — your personal Gemini API key
+
+The server writes the token-to-key mapping into the credentials file. After that, the `X-Gemini-API-Key` header is no longer needed — the server looks up the key from the credentials file using the bearer token.
+
+---
+
 ## Option A: Local stdio
 
 Runs `mcp-banana` as a subprocess of Claude Code. Communication happens over stdin/stdout. No network port is opened and no auth token is needed.
@@ -60,7 +71,7 @@ claude mcp add-json --scope user banana '{
 }'
 ```
 
-On the first request, both headers trigger self-registration: the server writes the token-to-key mapping into the credentials file. After that, the `X-Gemini-API-Key` header is no longer needed — the server looks up the key from the credentials file using the bearer token.
+On the first request, both headers trigger [self-registration](#self-registration). After that, the `X-Gemini-API-Key` header is no longer needed.
 
 **SSH tunnel setup:** When using an SSH tunnel instead of a bearer token, keep the URL as `http://localhost:8847/mcp` and omit the `Authorization` header:
 
@@ -92,12 +103,7 @@ claude mcp add-json --scope user banana '{
 
 Replace `mcp.yourdomain.com` with your actual domain. Generate your own bearer token with `openssl rand -hex 32` and get your Gemini API key from [aistudio.google.com](https://aistudio.google.com/).
 
-Both headers are needed on the first request (self-registration):
-
-- `Authorization` — your bearer token, which becomes your identity in the credentials file
-- `X-Gemini-API-Key` — your personal Gemini API key (stored in the credentials file for future requests)
-
-After self-registration, the `X-Gemini-API-Key` header is no longer needed.
+Both headers are needed on the first request for [self-registration](#self-registration). After that, the `X-Gemini-API-Key` header is no longer needed.
 
 ---
 
