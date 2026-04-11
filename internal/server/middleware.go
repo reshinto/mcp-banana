@@ -155,6 +155,12 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 
 		// 2. Bearer token auth (optional -- skipped when no tokens configured)
 		if !mw.authenticateRequest(request) {
+			// SECURITY: Include WWW-Authenticate header per RFC 9728 so OAuth
+			// clients (e.g. Claude Desktop) can discover the protected resource
+			// metadata and initiate the OAuth flow automatically.
+			if mw.cfg.OAuthBaseURL != "" {
+				writer.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+mw.cfg.OAuthBaseURL+`/.well-known/oauth-protected-resource"`)
+			}
 			writeJSONError(writer, http.StatusUnauthorized, "unauthorized")
 			return
 		}
