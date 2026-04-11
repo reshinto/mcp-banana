@@ -23,8 +23,8 @@ type ServerMetadata struct {
 // /.well-known/oauth-protected-resource to discover which authorization server
 // protects the MCP resource.
 type ProtectedResourceMetadata struct {
-	Resource             string   `json:"resource"`
-	AuthorizationServers []string `json:"authorization_servers"`
+	Resource               string   `json:"resource"`
+	AuthorizationServers   []string `json:"authorization_servers"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported"`
 }
 
@@ -33,8 +33,8 @@ type ProtectedResourceMetadata struct {
 // where to find the authorization server for this MCP resource.
 func NewProtectedResourceHandler(baseURL string) http.Handler {
 	metadata := ProtectedResourceMetadata{
-		Resource:             baseURL,
-		AuthorizationServers: []string{baseURL},
+		Resource:               baseURL,
+		AuthorizationServers:   []string{baseURL},
 		BearerMethodsSupported: []string{"header"},
 	}
 
