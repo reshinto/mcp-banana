@@ -1,6 +1,4 @@
 services:
   mcp-banana:
-    ports:
-      - "0.0.0.0:8847:8847"
     volumes:
       - /etc/letsencrypt/live/${MCP_DOMAIN:-mcp.yourdomain.com}:/certs:ro

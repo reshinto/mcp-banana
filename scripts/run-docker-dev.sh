@@ -40,6 +40,9 @@ if ! grep -q "^GEMINI_API_KEY=.\+" .env 2>/dev/null; then
   echo "NOTE: GEMINI_API_KEY is not set in .env. Clients must provide their own key via X-Gemini-API-Key header." >&2
 fi
 
+# Stop any existing container to free port 8847
+${COMPOSE_CMD} down 2>/dev/null || true
+
 echo "Building and starting mcp-banana (dev mode, 127.0.0.1:8847)..."
 ${COMPOSE_CMD} up -d --build
 

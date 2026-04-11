@@ -171,9 +171,15 @@ if ! sudo test -f "$PRIVKEY"; then
 fi
 echo "[ok] fullchain.pem and privkey.pem exist"
 
-# --- Step 7: Build and start Docker ---
+# --- Step 7: Stop any existing container on the same port ---
 echo ""
+# Stop dev or previous prod container to free port 8847
+${COMPOSE_CMD} down 2>/dev/null || true
+${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml down 2>/dev/null || true
+
+# --- Step 8: Build and start Docker ---
 echo "Building and starting mcp-banana (production, 0.0.0.0:8847, ${DOMAIN})..."
+export MCP_BIND_ADDRESS=0.0.0.0
 ${COMPOSE_CMD} -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 # --- Step 8: Wait for health check ---
