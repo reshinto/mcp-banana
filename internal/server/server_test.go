@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -575,6 +576,342 @@ func TestNewHTTPHandler_OAuthRoutesNotMountedWhenNoBaseURL(test *testing.T) {
 
 	if rec.Code == http.StatusOK {
 		test.Fatalf("expected non-200 when OAuthBaseURL is empty, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: OAuth token with no ProviderIdentity ---
+
+func TestMiddlewareOAuthTokenNoProviderIdentity(test *testing.T) {
+	// OAuth token is valid but ProviderIdentity is empty — should fall through
+	// to bearer token lookup in credStore, which also won't match.
+	oauthStore := oauth.NewStore()
+	oauthStore.StoreAccessToken(&oauth.TokenData{
+		Token:            "oauth-no-identity",
+		ClientID:         "test-client",
+		ProviderIdentity: "", // no identity
+		ExpiresAt:        time.Now().Add(1 * time.Hour),
+	})
+
+	credStore := createCredStore(test, map[string]string{
+		"some-other-token": "AIzaSomeKey",
+	})
+
+	cfg := noAuthConfig()
+	handler := buildHandlerWithOAuthAndCreds(cfg, oauthStore, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer oauth-no-identity")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// Token not found via bearer lookup either, so should be 401
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for OAuth token with no identity, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: OAuth valid identity but no credStore ---
+
+func TestMiddlewareOAuthTokenNoCred(test *testing.T) {
+	// OAuth token valid with identity, but no credStore configured — should return 401.
+	oauthStore := oauth.NewStore()
+	oauthStore.StoreAccessToken(&oauth.TokenData{
+		Token:            "oauth-valid-no-creds",
+		ClientID:         "test-client",
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(1 * time.Hour),
+	})
+
+	cfg := noAuthConfig()
+	// No credStore — only oauthStore
+	handler := buildHandlerWithOAuthAndCreds(cfg, oauthStore, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer oauth-valid-no-creds")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 when OAuth identity exists but no credStore, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: OAuth valid identity but not in credentials file ---
+
+func TestMiddlewareOAuthTokenIdentityNotInCredentials(test *testing.T) {
+	// OAuth token is valid with identity, credStore exists, but identity is not in the file.
+	oauthStore := oauth.NewStore()
+	oauthStore.StoreAccessToken(&oauth.TokenData{
+		Token:            "oauth-unknown-identity",
+		ClientID:         "test-client",
+		ProviderIdentity: "google:unknown@example.com",
+		ExpiresAt:        time.Now().Add(1 * time.Hour),
+	})
+
+	credStore := createCredStore(test, map[string]string{
+		"google:known@example.com": "AIzaKnownKey",
+	})
+
+	cfg := noAuthConfig()
+	handler := buildHandlerWithOAuthAndCreds(cfg, oauthStore, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/mcp", jsonRPCBody("tools/list"))
+	req.Header.Set("Authorization", "Bearer oauth-unknown-identity")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 when OAuth identity not in credentials, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: Self-registration via X-Gemini-API-Key ---
+
+func TestMiddlewareSelfRegistrationSuccess(test *testing.T) {
+	// Unknown bearer token + valid X-Gemini-API-Key header → self-register and proceed.
+	restore := credentials.OverrideGeminiKeyValidator(func(_ context.Context, _ string) error {
+		return nil // key is "valid"
+	})
+	defer restore()
+
+	credStore := createCredStore(test, map[string]string{})
+
+	var capturedKey string
+	captureHandler := http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		capturedKey = gemini.APIKeyFromContext(request.Context())
+	})
+	wrappedHandler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(), captureHandler, nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("X-Gemini-API-Key", "AIzaSelfRegKey")
+	rec := httptest.NewRecorder()
+
+	wrappedHandler.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnauthorized {
+		test.Fatalf("expected self-registration to succeed, got 401")
+	}
+	if capturedKey != "AIzaSelfRegKey" {
+		test.Errorf("expected self-registered key in context, got %q", capturedKey)
+	}
+
+	// Verify the key was persisted — subsequent request with same bearer should work
+	req2 := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req2.Header.Set("Authorization", "Bearer new-client-token")
+	rec2 := httptest.NewRecorder()
+	wrappedHandler.ServeHTTP(rec2, req2)
+
+	if rec2.Code == http.StatusUnauthorized {
+		test.Fatalf("expected persisted self-registration to work on second request, got 401")
+	}
+}
+
+func TestMiddlewareSelfRegistrationInvalidKey(test *testing.T) {
+	// Unknown bearer token + invalid X-Gemini-API-Key → rejected.
+	restore := credentials.OverrideGeminiKeyValidator(func(_ context.Context, _ string) error {
+		return fmt.Errorf("invalid key")
+	})
+	defer restore()
+
+	credStore := createCredStore(test, map[string]string{})
+
+	handler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("X-Gemini-API-Key", "AIzaBadKey")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 for invalid self-registration key, got %d", rec.Code)
+	}
+}
+
+func TestMiddlewareSelfRegistrationRegisterFails(test *testing.T) {
+	// Unknown bearer token + valid key but Register fails (e.g. file write error).
+	restore := credentials.OverrideGeminiKeyValidator(func(_ context.Context, _ string) error {
+		return nil
+	})
+	defer restore()
+
+	// Create a credStore pointing to a directory, then make it read-only so Register fails.
+	tempDir := test.TempDir()
+	readOnlyDir := tempDir + "/readonly"
+	mkdirError := os.Mkdir(readOnlyDir, 0755)
+	if mkdirError != nil {
+		test.Fatalf("failed to create dir: %v", mkdirError)
+	}
+
+	credsPath := readOnlyDir + "/creds.json"
+	writeError := os.WriteFile(credsPath, []byte("{}"), 0600)
+	if writeError != nil {
+		test.Fatalf("failed to write initial creds file: %v", writeError)
+	}
+
+	credStore, storeError := credentials.NewStore(credsPath)
+	if storeError != nil {
+		test.Fatalf("failed to create store: %v", storeError)
+	}
+
+	// Make the directory read-only so that Register's temp file write fails.
+	chmodError := os.Chmod(readOnlyDir, 0555)
+	if chmodError != nil {
+		test.Fatalf("failed to chmod dir: %v", chmodError)
+	}
+	test.Cleanup(func() { os.Chmod(readOnlyDir, 0755) })
+
+	handler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer new-client-token")
+	req.Header.Set("X-Gemini-API-Key", "AIzaValidKey")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 when Register fails, got %d", rec.Code)
+	}
+}
+
+func TestMiddlewareSelfRegistrationNoCredStore(test *testing.T) {
+	// X-Gemini-API-Key header present but no credStore — should reject (priority 4).
+	oauthStore := oauth.NewStore()
+
+	handler := server.WrapWithMiddleware(noAuthConfig(), slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), oauthStore, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer some-unknown-token")
+	req.Header.Set("X-Gemini-API-Key", "AIzaSomeKey")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401 when no credStore for self-registration, got %d", rec.Code)
+	}
+}
+
+// --- Middleware: WWW-Authenticate header with OAuthBaseURL ---
+
+func TestMiddlewareWWWAuthenticateHeaderWithOAuthBaseURL(test *testing.T) {
+	cfg := &config.Config{
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "https://auth.example.com",
+	}
+
+	credStore := createCredStore(test, map[string]string{"valid-token": "AIzaKey"})
+
+	handler := server.WrapWithMiddleware(cfg, slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	expectedFragment := `resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource"`
+	if !strings.Contains(wwwAuth, expectedFragment) {
+		test.Errorf("expected WWW-Authenticate header to contain %q, got %q", expectedFragment, wwwAuth)
+	}
+}
+
+func TestMiddlewareNoWWWAuthenticateHeaderWithoutOAuthBaseURL(test *testing.T) {
+	cfg := noAuthConfig() // OAuthBaseURL is empty
+
+	credStore := createCredStore(test, map[string]string{"valid-token": "AIzaKey"})
+
+	handler := server.WrapWithMiddleware(cfg, slog.Default(),
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}), nil, credStore)
+
+	req := httptest.NewRequest(http.MethodPost, "/anything", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		test.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if wwwAuth != "" {
+		test.Errorf("expected no WWW-Authenticate header without OAuthBaseURL, got %q", wwwAuth)
+	}
+}
+
+// --- NewHTTPHandler: /gemini-key routing ---
+
+func TestNewHTTPHandler_GeminiKeyGetRoute(test *testing.T) {
+	cfg := &config.Config{
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "https://example.com",
+	}
+
+	store := oauth.NewStore()
+	providers := []oauth.ProviderConfig{
+		oauth.NewGoogleProvider("client-id", "client-secret"),
+	}
+
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/gemini-key?session=fake-session", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// The GET handler serves an HTML form; it should not 404.
+	// It may return 400 for invalid session, but it should be routed to the handler.
+	if rec.Code == http.StatusNotFound {
+		test.Fatalf("expected /gemini-key GET to be routed, got 404")
+	}
+}
+
+func TestNewHTTPHandler_GeminiKeyPostRoute(test *testing.T) {
+	cfg := &config.Config{
+		RateLimit:         100,
+		GlobalConcurrency: 8,
+		MaxImageBytes:     4 * 1024 * 1024,
+		OAuthBaseURL:      "https://example.com",
+	}
+
+	store := oauth.NewStore()
+	providers := []oauth.ProviderConfig{
+		oauth.NewGoogleProvider("client-id", "client-secret"),
+	}
+
+	mcpSrv := server.NewMCPServer(testClientCache(), cfg.MaxImageBytes)
+	handler := server.NewHTTPHandler(mcpSrv, cfg, slog.Default(), store, providers, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/gemini-key", strings.NewReader("session=fake&gemini_api_key=AIzaFake"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	// The POST handler processes the form; it should not 404.
+	if rec.Code == http.StatusNotFound {
+		test.Fatalf("expected /gemini-key POST to be routed, got 404")
 	}
 }
 
