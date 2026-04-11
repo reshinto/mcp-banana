@@ -692,7 +692,8 @@ func TestCallbackHandler_IdentityFetchFailure(test *testing.T) {
 // --- NewCallbackHandler: returning user appends returning=true ---
 
 // TestCallbackHandler_ReturningUser verifies that when the user already has a key
-// in the credentials store, the redirect includes returning=true.
+// in the credentials store, the Gemini key prompt is skipped and the user is
+// redirected directly to the client redirect URI with an auth code.
 func TestCallbackHandler_ReturningUser(test *testing.T) {
 	store := NewStore()
 	store.StoreProviderSession(&ProviderSession{
@@ -734,8 +735,11 @@ func TestCallbackHandler_ReturningUser(test *testing.T) {
 	}
 
 	location := recorder.Header().Get("Location")
-	if !containsSubstring(location, "returning=true") {
-		test.Errorf("expected returning=true in redirect, got %s", location)
+	if !containsSubstring(location, "app.example.com/callback") {
+		test.Errorf("expected redirect to client callback, got %s", location)
+	}
+	if !containsSubstring(location, "code=") {
+		test.Errorf("expected auth code in redirect, got %s", location)
 	}
 }
 

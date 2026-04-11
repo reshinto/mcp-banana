@@ -388,6 +388,23 @@ func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string
 
 		isReturning := credStore.Exists(providerIdentity)
 
+		// Returning users with an existing Gemini key skip the prompt page
+		// and go directly to auth code issuance. This is critical for MCP
+		// clients like Claude Desktop that automate the OAuth redirect chain
+		// and cannot handle interactive prompt pages mid-flow.
+		if isReturning {
+			geminiKeySession := &GeminiKeySession{
+				ProviderIdentity: providerIdentity,
+				ClientID:         session.ClientID,
+				RedirectURI:      session.RedirectURI,
+				CodeChallenge:    session.CodeChallenge,
+				OriginalState:    session.OriginalState,
+				ExpiresAt:        time.Now().Add(10 * time.Minute),
+			}
+			issueAuthCodeRedirect(writer, request, store, geminiKeySession)
+			return
+		}
+
 		sessionToken, generateError := GenerateRandomToken(16)
 		if generateError != nil {
 			writeJSONError(writer, "server_error", http.StatusInternalServerError)
@@ -402,12 +419,7 @@ func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string
 			OriginalState:    session.OriginalState,
 			ExpiresAt:        time.Now().Add(10 * time.Minute),
 		})
-
-		returningParam := ""
-		if isReturning {
-			returningParam = "&returning=true"
-		}
-		http.Redirect(writer, request, "/gemini-key?session="+sessionToken+returningParam, http.StatusFound)
+		http.Redirect(writer, request, "/gemini-key?session="+sessionToken, http.StatusFound)
 	})
 }
 
