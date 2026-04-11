@@ -13,6 +13,28 @@ import (
 	"time"
 )
 
+// mockCredentialsStore is a test double for the CredentialsStore interface.
+type mockCredentialsStore struct {
+	keys map[string]string
+}
+
+func newMockCredentialsStore() *mockCredentialsStore {
+	return &mockCredentialsStore{keys: make(map[string]string)}
+}
+
+func (mock *mockCredentialsStore) Lookup(identity string) string {
+	return mock.keys[identity]
+}
+
+func (mock *mockCredentialsStore) Exists(identity string) bool {
+	return mock.keys[identity] != ""
+}
+
+func (mock *mockCredentialsStore) Register(identity string, geminiAPIKey string) error {
+	mock.keys[identity] = geminiAPIKey
+	return nil
+}
+
 // containsSubstring reports whether needle appears within haystack.
 func containsSubstring(haystack, needle string) bool {
 	haystackLen := len(haystack)
@@ -384,7 +406,7 @@ func TestTokenHandler_RefreshToken_ClientMismatch(test *testing.T) {
 func TestCallbackHandler_InvalidState(test *testing.T) {
 	store := NewStore()
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	request := httptest.NewRequest(http.MethodGet, "/callback?code=somecode&state=unknown-state", nil)
 	recorder := httptest.NewRecorder()
@@ -439,7 +461,7 @@ func TestCallbackHandler_Success(test *testing.T) {
 	}
 	defer func() { providerIdentityFetcher = originalFetcher }()
 
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	request := httptest.NewRequest(http.MethodGet, "/callback?code=provider-code&state=provider-state-xyz", nil)
 	recorder := httptest.NewRecorder()
@@ -458,11 +480,11 @@ func TestCallbackHandler_Success(test *testing.T) {
 	if parseError != nil {
 		test.Fatalf("failed to parse Location header: %v", parseError)
 	}
-	if parsed.Query().Get("state") != "original-client-state" {
-		test.Errorf("expected state original-client-state, got %s", parsed.Query().Get("state"))
+	if parsed.Path != "/gemini-key" {
+		test.Errorf("expected redirect to /gemini-key, got %s", parsed.Path)
 	}
-	if parsed.Query().Get("code") == "" {
-		test.Error("expected code query param to be set")
+	if parsed.Query().Get("session") == "" {
+		test.Error("expected session query param to be set")
 	}
 }
 
@@ -488,7 +510,7 @@ func TestCallbackHandler_ProviderExchangeFailure(test *testing.T) {
 	}
 	defer func() { exchangeProviderCode = originalExchange }()
 
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	request := httptest.NewRequest(http.MethodGet, "/callback?code=bad-code&state=state-fail", nil)
 	recorder := httptest.NewRecorder()
@@ -528,7 +550,7 @@ func TestCallbackHandler_PostMethod(test *testing.T) {
 	}
 	defer func() { providerIdentityFetcher = originalFetcher }()
 
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	formData := url.Values{}
 	formData.Set("code", "apple-auth-code")

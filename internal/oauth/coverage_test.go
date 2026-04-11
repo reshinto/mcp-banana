@@ -116,7 +116,7 @@ func TestAuthorizeHandler_TokenGenerationFailure(test *testing.T) {
 // --- NewCallbackHandler: GenerateRandomToken failure ---
 
 // TestCallbackHandler_TokenGenerationFailure verifies that a server_error is returned
-// when GenerateRandomToken fails during MCP code creation in the callback handler.
+// when GenerateRandomToken fails during session token creation in the callback handler.
 func TestCallbackHandler_TokenGenerationFailure(test *testing.T) {
 	store := NewStore()
 	store.StoreProviderSession(&ProviderSession{
@@ -143,7 +143,7 @@ func TestCallbackHandler_TokenGenerationFailure(test *testing.T) {
 	}
 	defer func() { providerIdentityFetcher = originalFetcher }()
 
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	withFailingTokenGenerator(test, func() {
 		request := httptest.NewRequest(http.MethodGet, "/callback?code=any-code&state=state-token-fail", nil)
@@ -174,7 +174,7 @@ func TestCallbackHandler_UnmatchedProvider(test *testing.T) {
 	})
 
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	request := httptest.NewRequest(http.MethodGet, "/callback?code=any-code&state=state-no-provider", nil)
 	recorder := httptest.NewRecorder()
@@ -395,7 +395,7 @@ func TestTokenHandler_InvalidRefreshToken(test *testing.T) {
 func TestCallbackHandler_PostParseFailure(test *testing.T) {
 	store := NewStore()
 	providers := []ProviderConfig{NewGoogleProvider("gid", "gsecret")}
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	// A body with invalid percent-encoding causes ParseForm to return an error.
 	body := strings.NewReader("%invalid-percent-encoding")
@@ -410,13 +410,13 @@ func TestCallbackHandler_PostParseFailure(test *testing.T) {
 	}
 }
 
-// --- NewCallbackHandler: url.Parse failure on redirect URI ---
+// --- NewCallbackHandler: malformed redirect URI now stored in GeminiKeySession ---
 
-// TestCallbackHandler_MalformedRedirectURI verifies that a session containing a malformed
-// redirect URI causes a 500 server_error after the provider code is exchanged successfully.
+// TestCallbackHandler_MalformedRedirectURI verifies that the callback handler successfully
+// redirects to the Gemini key prompt even when the redirect URI is malformed. The malformed
+// URI is stored in the GeminiKeySession and will cause an error later in issueAuthCodeRedirect.
 func TestCallbackHandler_MalformedRedirectURI(test *testing.T) {
 	store := NewStore()
-	// Store a session with a redirect URI that url.Parse will reject.
 	store.StoreProviderSession(&ProviderSession{
 		State:         "state-bad-uri",
 		ClientID:      "client-abc",
@@ -441,15 +441,19 @@ func TestCallbackHandler_MalformedRedirectURI(test *testing.T) {
 	}
 	defer func() { providerIdentityFetcher = originalFetcher }()
 
-	handler := NewCallbackHandler(store, providers, "https://mcp.example.com")
+	handler := NewCallbackHandler(store, providers, "https://mcp.example.com", newMockCredentialsStore())
 
 	request := httptest.NewRequest(http.MethodGet, "/callback?code=any-code&state=state-bad-uri", nil)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusInternalServerError {
-		test.Errorf("expected status 500, got %d", recorder.Code)
+	if recorder.Code != http.StatusFound {
+		test.Errorf("expected status 302, got %d", recorder.Code)
+	}
+	location := recorder.Header().Get("Location")
+	if !containsSubstring(location, "/gemini-key?session=") {
+		test.Errorf("expected redirect to /gemini-key, got %s", location)
 	}
 }
 

@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -9,11 +10,25 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+
+	"github.com/reshinto/mcp-banana/internal/credentials"
 )
 
 //go:embed login.html
 var loginPageFS embed.FS
+
+//go:embed gemini_prompt.html
+var geminiPromptFS embed.FS
+
+// CredentialsStore is the interface that the OAuth handlers use to read and write
+// credentials. It is satisfied by *credentials.Store.
+type CredentialsStore interface {
+	Lookup(identity string) string
+	Exists(identity string) bool
+	Register(identity string, geminiAPIKey string) error
+}
 
 // ProviderLink holds the display information and redirect URL for a single
 // upstream identity provider shown on the login page.
@@ -208,9 +223,9 @@ func fetchProviderIdentity(provider ProviderConfig, providerAccessToken string) 
 
 // NewCallbackHandler returns an http.Handler for the OAuth provider callback endpoint.
 // It handles GET callbacks (Google, GitHub) and POST callbacks (Apple), validates the
-// state parameter, exchanges the provider code for an MCP authorization code, and
-// redirects the client back to the registered redirect URI.
-func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string) http.Handler {
+// state parameter, exchanges the provider code for a provider access token, fetches
+// the user identity, and redirects to the Gemini key prompt page.
+func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string, credStore CredentialsStore) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var code, state string
 
@@ -273,32 +288,28 @@ func NewCallbackHandler(store *Store, providers []ProviderConfig, baseURL string
 			return
 		}
 
-		mcpCode, generateError := GenerateRandomToken(32)
+		isReturning := credStore.Exists(providerIdentity)
+
+		sessionToken, generateError := GenerateRandomToken(16)
 		if generateError != nil {
 			writeJSONError(writer, "server_error", http.StatusInternalServerError)
 			return
 		}
 
-		store.StoreAuthCode(&AuthCode{
-			Code:             mcpCode,
+		store.StoreGeminiKeySession(sessionToken, &GeminiKeySession{
+			ProviderIdentity: providerIdentity,
 			ClientID:         session.ClientID,
 			RedirectURI:      session.RedirectURI,
 			CodeChallenge:    session.CodeChallenge,
-			ProviderIdentity: providerIdentity,
+			OriginalState:    session.OriginalState,
 			ExpiresAt:        time.Now().Add(10 * time.Minute),
 		})
 
-		redirectTarget, parseError := url.Parse(session.RedirectURI)
-		if parseError != nil {
-			writeJSONError(writer, "server_error", http.StatusInternalServerError)
-			return
+		returningParam := ""
+		if isReturning {
+			returningParam = "&returning=true"
 		}
-		redirectQuery := redirectTarget.Query()
-		redirectQuery.Set("code", mcpCode)
-		redirectQuery.Set("state", session.OriginalState)
-		redirectTarget.RawQuery = redirectQuery.Encode()
-
-		http.Redirect(writer, request, redirectTarget.String(), http.StatusFound)
+		http.Redirect(writer, request, "/gemini-key?session="+sessionToken+returningParam, http.StatusFound)
 	})
 }
 
@@ -433,4 +444,149 @@ func issueTokenResponse(writer http.ResponseWriter, store *Store, clientID strin
 		"expires_in":    3600,
 		"refresh_token": newRefreshToken,
 	})
+}
+
+// geminiPromptData holds the template variables for the Gemini key prompt page.
+type geminiPromptData struct {
+	Identity     string
+	IsReturning  bool
+	SessionToken string
+	Error        string
+}
+
+// NewGeminiKeyPromptHandler returns an http.Handler that renders the Gemini API key
+// prompt form. It reads session, error, and returning from query parameters and uses
+// PeekGeminiKeySession to retrieve the user identity.
+func NewGeminiKeyPromptHandler(store *Store) http.Handler {
+	promptTemplate := template.Must(template.ParseFS(geminiPromptFS, "gemini_prompt.html"))
+
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		queryParams := request.URL.Query()
+		sessionToken := queryParams.Get("session")
+		errorMessage := queryParams.Get("error")
+		isReturning := queryParams.Get("returning") == "true"
+
+		session := store.PeekGeminiKeySession(sessionToken)
+		if session == nil {
+			writeJSONError(writer, "invalid_request", http.StatusBadRequest)
+			return
+		}
+
+		writer.Header().Set("Content-Type", "text/html; charset=utf-8")
+		writer.WriteHeader(http.StatusOK)
+		renderError := promptTemplate.Execute(writer, geminiPromptData{
+			Identity:     session.ProviderIdentity,
+			IsReturning:  isReturning,
+			SessionToken: sessionToken,
+			Error:        errorMessage,
+		})
+		if renderError != nil {
+			http.Error(writer, "internal server error", http.StatusInternalServerError)
+		}
+	})
+}
+
+// NewGeminiKeySubmitHandler returns an http.Handler that processes the Gemini API key
+// form submission. It validates the key, registers it in the credentials store, and
+// redirects the client to complete the OAuth flow with an authorization code.
+func NewGeminiKeySubmitHandler(store *Store, credStore CredentialsStore) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if parseError := request.ParseForm(); parseError != nil {
+			writeJSONError(writer, "invalid_request", http.StatusBadRequest)
+			return
+		}
+
+		sessionToken := request.PostForm.Get("session_token")
+		geminiAPIKey := strings.TrimSpace(request.PostForm.Get("gemini_api_key"))
+		action := request.PostForm.Get("action")
+
+		session := store.ConsumeGeminiKeySession(sessionToken)
+		if session == nil {
+			writeJSONError(writer, "invalid_request", http.StatusBadRequest)
+			return
+		}
+
+		if action == "skip" {
+			if !credStore.Exists(session.ProviderIdentity) {
+				newToken, generateError := GenerateRandomToken(16)
+				if generateError != nil {
+					writeJSONError(writer, "server_error", http.StatusInternalServerError)
+					return
+				}
+				store.StoreGeminiKeySession(newToken, session)
+				http.Redirect(writer, request, "/gemini-key?session="+newToken+"&returning=true&error=No+existing+key+found.+Please+provide+a+Gemini+API+key.", http.StatusFound)
+				return
+			}
+			issueAuthCodeRedirect(writer, request, store, session)
+			return
+		}
+
+		if geminiAPIKey == "" {
+			newToken, generateError := GenerateRandomToken(16)
+			if generateError != nil {
+				writeJSONError(writer, "server_error", http.StatusInternalServerError)
+				return
+			}
+			returningParam := ""
+			if credStore.Exists(session.ProviderIdentity) {
+				returningParam = "&returning=true"
+			}
+			store.StoreGeminiKeySession(newToken, session)
+			http.Redirect(writer, request, "/gemini-key?session="+newToken+returningParam+"&error=Gemini+API+key+must+not+be+empty", http.StatusFound)
+			return
+		}
+
+		ctx := context.Background()
+		validationError := credentials.ValidateGeminiKey(ctx, geminiAPIKey)
+		if validationError != nil {
+			newToken, generateError := GenerateRandomToken(16)
+			if generateError != nil {
+				writeJSONError(writer, "server_error", http.StatusInternalServerError)
+				return
+			}
+			returningParam := ""
+			if credStore.Exists(session.ProviderIdentity) {
+				returningParam = "&returning=true"
+			}
+			store.StoreGeminiKeySession(newToken, session)
+			http.Redirect(writer, request, "/gemini-key?session="+newToken+returningParam+"&error=Invalid+Gemini+API+key", http.StatusFound)
+			return
+		}
+
+		registerError := credStore.Register(session.ProviderIdentity, geminiAPIKey)
+		if registerError != nil {
+			writeJSONError(writer, "server_error", http.StatusInternalServerError)
+			return
+		}
+
+		issueAuthCodeRedirect(writer, request, store, session)
+	})
+}
+
+// issueAuthCodeRedirect generates an MCP authorization code, stores it, and redirects
+// the user-agent back to the client's redirect URI with the code and state parameters.
+func issueAuthCodeRedirect(writer http.ResponseWriter, request *http.Request, store *Store, session *GeminiKeySession) {
+	mcpCode, generateError := GenerateRandomToken(32)
+	if generateError != nil {
+		writeJSONError(writer, "server_error", http.StatusInternalServerError)
+		return
+	}
+	store.StoreAuthCode(&AuthCode{
+		Code:             mcpCode,
+		ClientID:         session.ClientID,
+		RedirectURI:      session.RedirectURI,
+		CodeChallenge:    session.CodeChallenge,
+		ProviderIdentity: session.ProviderIdentity,
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+	redirectTarget, parseError := url.Parse(session.RedirectURI)
+	if parseError != nil {
+		writeJSONError(writer, "server_error", http.StatusInternalServerError)
+		return
+	}
+	redirectQuery := redirectTarget.Query()
+	redirectQuery.Set("code", mcpCode)
+	redirectQuery.Set("state", session.OriginalState)
+	redirectTarget.RawQuery = redirectQuery.Encode()
+	http.Redirect(writer, request, redirectTarget.String(), http.StatusFound)
 }

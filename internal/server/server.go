@@ -106,7 +106,7 @@ func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, lo
 		publicMux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
 		publicMux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
 		publicMux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
-		publicMux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		publicMux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL, nil))
 		publicMux.Handle("/token", oauth.NewTokenHandler(oauthStore))
 	}
 
