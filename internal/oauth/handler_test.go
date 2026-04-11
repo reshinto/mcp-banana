@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/reshinto/mcp-banana/internal/credentials"
 )
 
 // mockCredentialsStore is a test double for the CredentialsStore interface.
@@ -564,5 +567,194 @@ func TestCallbackHandler_PostMethod(test *testing.T) {
 
 	if recorder.Code != http.StatusFound {
 		test.Errorf("expected status 302, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestGeminiKeyPromptHandler_RendersPage verifies that a valid session token renders
+// the Gemini key prompt page with HTTP 200.
+func TestGeminiKeyPromptHandler_RendersPage(test *testing.T) {
+	store := NewStore()
+	store.StoreGeminiKeySession("valid-session", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ClientID:         "client-abc",
+		RedirectURI:      "https://app.example.com/callback",
+		CodeChallenge:    "challenge123",
+		OriginalState:    "state456",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+
+	handler := NewGeminiKeyPromptHandler(store)
+
+	request := httptest.NewRequest(http.MethodGet, "/gemini-key?session=valid-session", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		test.Errorf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	responseBody := recorder.Body.String()
+	if !containsSubstring(responseBody, "google:user@example.com") {
+		test.Error("expected response body to contain user identity")
+	}
+}
+
+// TestGeminiKeyPromptHandler_InvalidSession verifies that a missing or invalid session
+// token returns HTTP 400.
+func TestGeminiKeyPromptHandler_InvalidSession(test *testing.T) {
+	store := NewStore()
+	handler := NewGeminiKeyPromptHandler(store)
+
+	request := httptest.NewRequest(http.MethodGet, "/gemini-key?session=nonexistent", nil)
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		test.Errorf("expected status 400, got %d", recorder.Code)
+	}
+}
+
+// TestGeminiKeySubmitHandler_SkipWithExistingKey verifies that the skip action with an
+// existing key in the credentials store redirects to the client redirect URI with a code.
+func TestGeminiKeySubmitHandler_SkipWithExistingKey(test *testing.T) {
+	store := NewStore()
+	credStore := newMockCredentialsStore()
+	credStore.keys["google:user@example.com"] = "existing-key"
+
+	store.StoreGeminiKeySession("skip-session", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ClientID:         "client-abc",
+		RedirectURI:      "https://app.example.com/callback",
+		CodeChallenge:    "challenge123",
+		OriginalState:    "state456",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+
+	handler := NewGeminiKeySubmitHandler(store, credStore)
+
+	formData := url.Values{}
+	formData.Set("session_token", "skip-session")
+	formData.Set("action", "skip")
+
+	request := httptest.NewRequest(http.MethodPost, "/gemini-key-submit", bytes.NewBufferString(formData.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		test.Errorf("expected status 302, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	location := recorder.Header().Get("Location")
+	parsed, parseError := url.Parse(location)
+	if parseError != nil {
+		test.Fatalf("failed to parse Location: %v", parseError)
+	}
+	if !containsSubstring(parsed.Host, "app.example.com") {
+		test.Errorf("expected redirect to client redirect URI, got %s", location)
+	}
+	if parsed.Query().Get("code") == "" {
+		test.Error("expected code query param in redirect")
+	}
+	if parsed.Query().Get("state") != "state456" {
+		test.Errorf("expected state=state456, got %s", parsed.Query().Get("state"))
+	}
+}
+
+// TestGeminiKeySubmitHandler_RejectsEmptyKey verifies that submitting an empty API key
+// redirects back to the prompt form with an error message.
+func TestGeminiKeySubmitHandler_RejectsEmptyKey(test *testing.T) {
+	store := NewStore()
+	credStore := newMockCredentialsStore()
+
+	store.StoreGeminiKeySession("empty-key-session", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ClientID:         "client-abc",
+		RedirectURI:      "https://app.example.com/callback",
+		CodeChallenge:    "challenge123",
+		OriginalState:    "state456",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+
+	handler := NewGeminiKeySubmitHandler(store, credStore)
+
+	formData := url.Values{}
+	formData.Set("session_token", "empty-key-session")
+	formData.Set("gemini_api_key", "")
+
+	request := httptest.NewRequest(http.MethodPost, "/gemini-key-submit", bytes.NewBufferString(formData.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		test.Errorf("expected status 302, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	location := recorder.Header().Get("Location")
+	if !containsSubstring(location, "/gemini-key") {
+		test.Errorf("expected redirect to /gemini-key, got %s", location)
+	}
+	if !containsSubstring(location, "error=") {
+		test.Errorf("expected error query param in redirect, got %s", location)
+	}
+}
+
+// TestGeminiKeySubmitHandler_SuccessfulRegistration verifies that a valid Gemini API key
+// is registered and the user is redirected to the client redirect URI.
+func TestGeminiKeySubmitHandler_SuccessfulRegistration(test *testing.T) {
+	store := NewStore()
+	credStore := newMockCredentialsStore()
+
+	store.StoreGeminiKeySession("submit-session", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ClientID:         "client-abc",
+		RedirectURI:      "https://app.example.com/callback",
+		CodeChallenge:    "challenge123",
+		OriginalState:    "state456",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+
+	// Replace the Gemini key validator to avoid real API calls
+	restoreValidator := credentials.OverrideGeminiKeyValidator(func(ctx context.Context, apiKey string) error {
+		return nil
+	})
+	defer restoreValidator()
+
+	handler := NewGeminiKeySubmitHandler(store, credStore)
+
+	formData := url.Values{}
+	formData.Set("session_token", "submit-session")
+	formData.Set("gemini_api_key", "AIzaTestKey123456")
+
+	request := httptest.NewRequest(http.MethodPost, "/gemini-key-submit", bytes.NewBufferString(formData.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		test.Errorf("expected status 302, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	location := recorder.Header().Get("Location")
+	parsed, parseError := url.Parse(location)
+	if parseError != nil {
+		test.Fatalf("failed to parse Location: %v", parseError)
+	}
+	if !containsSubstring(parsed.Host, "app.example.com") {
+		test.Errorf("expected redirect to client redirect URI, got %s", location)
+	}
+	if parsed.Query().Get("code") == "" {
+		test.Error("expected code query param in redirect")
+	}
+
+	// Verify the key was registered
+	if credStore.Lookup("google:user@example.com") != "AIzaTestKey123456" {
+		test.Error("expected Gemini key to be registered in credentials store")
 	}
 }

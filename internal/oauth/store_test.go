@@ -283,3 +283,83 @@ func TestGetAccessTokenData_ReturnsNilForMissing(test *testing.T) {
 		test.Error("expected nil for missing token")
 	}
 }
+
+func TestStoreGeminiKeySession_And_Consume(test *testing.T) {
+	store := NewStore()
+	session := &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ClientID:         "client-1",
+		RedirectURI:      "http://localhost:3000/callback",
+		CodeChallenge:    "challenge123",
+		OriginalState:    "state456",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	}
+	store.StoreGeminiKeySession("session-token", session)
+
+	consumed := store.ConsumeGeminiKeySession("session-token")
+	if consumed == nil {
+		test.Fatal("expected non-nil session")
+	}
+	if consumed.ProviderIdentity != "google:user@example.com" {
+		test.Errorf("expected google:user@example.com, got: %s", consumed.ProviderIdentity)
+	}
+
+	// Second consume should return nil (single-use)
+	secondConsume := store.ConsumeGeminiKeySession("session-token")
+	if secondConsume != nil {
+		test.Error("expected nil on second consume (single-use)")
+	}
+}
+
+func TestConsumeGeminiKeySession_Expired(test *testing.T) {
+	store := NewStore()
+	store.StoreGeminiKeySession("expired-session", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(-time.Hour),
+	})
+
+	consumed := store.ConsumeGeminiKeySession("expired-session")
+	if consumed != nil {
+		test.Error("expected nil for expired session")
+	}
+}
+
+func TestPeekGeminiKeySession_DoesNotConsume(test *testing.T) {
+	store := NewStore()
+	store.StoreGeminiKeySession("peek-token", &GeminiKeySession{
+		ProviderIdentity: "github:dev@example.com",
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
+	})
+
+	peeked := store.PeekGeminiKeySession("peek-token")
+	if peeked == nil {
+		test.Fatal("expected non-nil session on peek")
+	}
+
+	// Peek again — should still be there
+	peekedAgain := store.PeekGeminiKeySession("peek-token")
+	if peekedAgain == nil {
+		test.Error("expected session to still exist after peek")
+	}
+}
+
+func TestPeekGeminiKeySession_ReturnsNilForExpired(test *testing.T) {
+	store := NewStore()
+	store.StoreGeminiKeySession("expired-peek", &GeminiKeySession{
+		ProviderIdentity: "google:user@example.com",
+		ExpiresAt:        time.Now().Add(-time.Hour),
+	})
+
+	peeked := store.PeekGeminiKeySession("expired-peek")
+	if peeked != nil {
+		test.Error("expected nil for expired session")
+	}
+}
+
+func TestPeekGeminiKeySession_ReturnsNilForMissing(test *testing.T) {
+	store := NewStore()
+	peeked := store.PeekGeminiKeySession("nonexistent")
+	if peeked != nil {
+		test.Error("expected nil for missing session")
+	}
+}

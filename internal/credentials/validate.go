@@ -30,6 +30,15 @@ var geminiKeyValidator = func(ctx context.Context, apiKey string) error {
 	return nil
 }
 
+// OverrideGeminiKeyValidator replaces the Gemini key validation function and returns
+// a restore function that reinstates the original. Intended for use in tests outside
+// this package to avoid real API calls.
+func OverrideGeminiKeyValidator(override func(ctx context.Context, apiKey string) error) func() {
+	original := geminiKeyValidator
+	geminiKeyValidator = override
+	return func() { geminiKeyValidator = original }
+}
+
 // ValidateGeminiKey checks whether the given API key is a valid Gemini API key
 // by making a lightweight API call. Returns nil if valid, an error otherwise.
 func ValidateGeminiKey(ctx context.Context, apiKey string) error {
