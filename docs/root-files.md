@@ -121,9 +121,7 @@ cp .env.example .env
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `MCP_DOMAIN` | Production only | — | Domain name for TLS cert path and OAuth redirect URLs |
-| `GEMINI_API_KEY` | Optional | — | Server-default Gemini API key; clients may override per-request via `X-Gemini-API-Key` header |
-| `MCP_AUTH_TOKEN` | Optional | — | Single bearer token for HTTP authentication; generate with `openssl rand -hex 32` or `make rotate-token` |
-| `MCP_AUTH_TOKENS_FILE` | Optional | — | Path to a file of bearer tokens (one per line); hot-reloaded on every request |
+| `MCP_CREDENTIALS_FILE` | Optional | — | Path to a JSON file mapping bearer tokens and OAuth identities to Gemini API keys; hot-reloaded on every request |
 | `MCP_LOG_LEVEL` | Optional | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
 | `MCP_RATE_LIMIT` | Optional | `30` | Max requests per minute (all models) |
 | `MCP_GLOBAL_CONCURRENCY` | Optional | `8` | Max simultaneous Gemini API calls |
@@ -281,7 +279,7 @@ All scripts in `scripts/` are self-contained bash scripts. They `cd` to the proj
 |---|---|---|
 | `run-local.sh` | Loads `.env`, runs `make build`, starts the binary in stdio mode | `./scripts/run-local.sh` |
 | `run-docker-dev.sh` | Validates `.env` exists, runs `docker compose up -d --build`, prints connection info | `./scripts/run-docker-dev.sh` |
-| `run-docker-prod.sh` | Full production deployment: validates `.env` and `MCP_DOMAIN`, auto-populates `OAUTH_BASE_URL`/TLS paths/`MCP_AUTH_TOKEN`, runs certbot if certs are missing, starts the production stack, waits for `/healthz` to return healthy | `./scripts/run-docker-prod.sh` |
+| `run-docker-prod.sh` | Full production deployment: validates `.env` and `MCP_DOMAIN`, auto-populates `OAUTH_BASE_URL`/TLS paths, creates `credentials.json` if missing, runs certbot if certs are missing, starts the production stack, waits for `/healthz` to return healthy | `./scripts/run-docker-prod.sh` |
 
 `run-docker-prod.sh` will not start Docker unless all prerequisites are satisfied. If anything fails, it prints a specific error and exits non-zero before modifying state.
 
