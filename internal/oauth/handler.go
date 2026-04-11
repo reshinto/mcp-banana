@@ -240,15 +240,77 @@ var providerIdentityFetcher = func(provider ProviderConfig, providerAccessToken 
 
 	var userInfo struct {
 		Email string `json:"email"`
+		Login string `json:"login"`
 	}
 	if decodeError := json.NewDecoder(resp.Body).Decode(&userInfo); decodeError != nil {
 		return "", fmt.Errorf("failed to decode userinfo response: %w", decodeError)
 	}
+
+	// GitHub users with private emails return null for the email field.
+	// Fall back to the /user/emails endpoint to get the primary verified email.
+	if userInfo.Email == "" && provider.Name == "github" {
+		emailAddr, emailError := fetchGitHubPrimaryEmail(providerAccessToken)
+		if emailError != nil {
+			// Last resort: use the GitHub login (username) as identity.
+			if userInfo.Login != "" {
+				return provider.Name + ":" + userInfo.Login, nil
+			}
+			return "", fmt.Errorf("failed to retrieve GitHub email: %w", emailError)
+		}
+		userInfo.Email = emailAddr
+	}
+
 	if userInfo.Email == "" {
 		return "", errors.New("userinfo response did not contain an email")
 	}
 
 	return provider.Name + ":" + userInfo.Email, nil
+}
+
+// fetchGitHubPrimaryEmail retrieves the primary verified email from GitHub's
+// /user/emails endpoint. This is needed when the user has set their email to private.
+func fetchGitHubPrimaryEmail(accessToken string) (string, error) {
+	emailRequest, requestError := http.NewRequest("GET", "https://api.github.com/user/emails", nil)
+	if requestError != nil {
+		return "", fmt.Errorf("failed to create email request: %w", requestError)
+	}
+	emailRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	emailRequest.Header.Set("Accept", "application/vnd.github+json")
+
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, fetchError := httpClient.Do(emailRequest)
+	if fetchError != nil {
+		return "", fmt.Errorf("email request failed: %w", fetchError)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body) //nolint:errcheck
+		return "", fmt.Errorf("email endpoint returned status %d", resp.StatusCode)
+	}
+
+	var emails []struct {
+		Email    string `json:"email"`
+		Primary  bool   `json:"primary"`
+		Verified bool   `json:"verified"`
+	}
+	if decodeError := json.NewDecoder(resp.Body).Decode(&emails); decodeError != nil {
+		return "", fmt.Errorf("failed to decode email response: %w", decodeError)
+	}
+
+	// Find the primary verified email.
+	for _, entry := range emails {
+		if entry.Primary && entry.Verified {
+			return entry.Email, nil
+		}
+	}
+	// Fall back to any verified email.
+	for _, entry := range emails {
+		if entry.Verified {
+			return entry.Email, nil
+		}
+	}
+	return "", errors.New("no verified email found")
 }
 
 // fetchProviderIdentity retrieves the authenticated user's identity from the upstream
