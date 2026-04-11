@@ -92,28 +92,47 @@ func WrapWithMiddleware(cfg *config.Config, logger *slog.Logger, inner http.Hand
 // OAuth 2.1 discovery and flow endpoints are also registered. All routes except
 // /healthz pass through the full middleware chain.
 func NewHTTPHandler(mcpSrv *mcpserver.MCPServer, serverConfig *config.Config, logger *slog.Logger, oauthStore *oauth.Store, providers []oauth.ProviderConfig) http.Handler {
-	mux := http.NewServeMux()
+	// Public routes — no auth, rate-limit, or body checks.
+	publicMux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	publicMux.HandleFunc("/healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusOK)
 		writer.Write([]byte(`{"status":"ok"}`)) //nolint:errcheck
 	})
 
+	if oauthStore != nil && serverConfig.OAuthBaseURL != "" {
+		publicMux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
+		publicMux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
+		publicMux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		publicMux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
+		publicMux.Handle("/token", oauth.NewTokenHandler(oauthStore))
+	}
+
+	// Protected routes — behind auth, rate-limit, concurrency, body size.
+	protectedMux := http.NewServeMux()
+
 	streamableHandler := mcpserver.NewStreamableHTTPServer(mcpSrv,
 		mcpserver.WithEndpointPath("/mcp"),
 		mcpserver.WithStateLess(true),
 	)
-	mux.Handle("/mcp", streamableHandler)
-
-	if oauthStore != nil && serverConfig.OAuthBaseURL != "" {
-		mux.Handle("/.well-known/oauth-authorization-server", oauth.NewMetadataHandler(serverConfig.OAuthBaseURL))
-		mux.Handle("/register", oauth.NewRegistrationHandler(oauthStore))
-		mux.Handle("/authorize", oauth.NewAuthorizeHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
-		mux.Handle("/callback", oauth.NewCallbackHandler(oauthStore, providers, serverConfig.OAuthBaseURL))
-		mux.Handle("/token", oauth.NewTokenHandler(oauthStore))
-	}
+	protectedMux.Handle("/mcp", streamableHandler)
 
 	mw := newMiddleware(serverConfig, logger, oauthStore)
-	return mw.WrapHTTP(mux)
+	wrappedProtected := mw.WrapHTTP(protectedMux)
+
+	// Top-level mux: public routes are checked first; unmatched requests
+	// fall through to the protected handler (which applies middleware).
+	topMux := http.NewServeMux()
+	topMux.Handle("/healthz", publicMux)
+	if oauthStore != nil && serverConfig.OAuthBaseURL != "" {
+		topMux.Handle("/.well-known/", publicMux)
+		topMux.Handle("/register", publicMux)
+		topMux.Handle("/authorize", publicMux)
+		topMux.Handle("/callback", publicMux)
+		topMux.Handle("/token", publicMux)
+	}
+	topMux.Handle("/", wrappedProtected)
+
+	return topMux
 }

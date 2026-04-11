@@ -153,13 +153,7 @@ func (mw *middleware) WrapHTTP(next http.Handler) http.Handler {
 			}
 		}()
 
-		// 2. Health check bypass — no auth, rate-limit, or body checks
-		if request.URL.Path == healthzPath {
-			next.ServeHTTP(writer, request)
-			return
-		}
-
-		// 3. Bearer token auth (optional -- skipped when no tokens configured)
+		// 2. Bearer token auth (optional -- skipped when no tokens configured)
 		if !mw.authenticateRequest(request) {
 			writeJSONError(writer, http.StatusUnauthorized, "unauthorized")
 			return
