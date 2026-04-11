@@ -181,19 +181,18 @@ echo "[ok] fullchain.pem and privkey.pem exist"
 
 # --- Step 7: Fix cert permissions for container ---
 # The container runs as nonroot (UID 65532). Let's Encrypt sets privkey to
-# 600 (root-only). We need the cert files and their parent directories to be
-# world-readable so the container process can access them.
-if ! sudo test -r "$PRIVKEY" -a -r "$FULLCHAIN"; then
-  echo "Fixing certificate file permissions for container access..."
-  sudo chmod -R a+r /etc/letsencrypt/archive/
-  sudo chmod a+x /etc/letsencrypt/archive/
-  sudo chmod a+x "/etc/letsencrypt/archive/${DOMAIN}/"
-  sudo chmod a+x /etc/letsencrypt/live/
-  sudo chmod a+x "${CERT_DIR}/"
-  echo "[ok] Certificate permissions fixed"
-else
-  echo "[ok] Certificate permissions are readable"
-fi
+# 600 and directories to 700 (root-only). We must make every directory in the
+# path traversable (a+x) and cert files readable (a+r) so the container can
+# access them. This runs unconditionally because host-side checks (even with
+# sudo) cannot predict what the container's nonroot user can access.
+echo "Ensuring certificate permissions allow container access..."
+sudo chmod a+x /etc/letsencrypt
+sudo chmod a+x /etc/letsencrypt/live
+sudo chmod a+x "${CERT_DIR}"
+sudo chmod a+x /etc/letsencrypt/archive
+sudo chmod a+x "/etc/letsencrypt/archive/${DOMAIN}"
+sudo chmod a+r "/etc/letsencrypt/archive/${DOMAIN}/"*
+echo "[ok] Certificate permissions set for container access"
 
 # --- Step 7: Stop any existing container on the same port ---
 echo ""
