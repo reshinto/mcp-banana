@@ -91,7 +91,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	logLevel := resolveLogLevel(serverConfig.LogLevel)
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: logLevel}))
 
-	// Load credentials file if configured
+	// Load credentials file if configured via MCP_CREDENTIALS_FILE.
 	var credStore *credentials.Store
 	if serverConfig.CredentialsFile != "" {
 		var credError error

@@ -83,6 +83,60 @@ func setupServerEnv(test *testing.T) {
 	withMockClientFactory(test, nil)
 }
 
+// --- Default var function bodies ---
+
+// TestDefaultRegistryValidator exercises the production registryValidator var
+// so that its function body is included in coverage.
+func TestDefaultRegistryValidator(test *testing.T) {
+	if validationError := registryValidator(); validationError != nil {
+		test.Fatalf("default registry validator failed: %v", validationError)
+	}
+}
+
+// TestDefaultClientFactory exercises the production clientFactory var
+// so that its function body is included in coverage.
+func TestDefaultClientFactory(test *testing.T) {
+	client, factoryError := clientFactory(context.Background(), "test-key-for-coverage", 30, 2)
+	if factoryError != nil {
+		test.Fatalf("default client factory failed: %v", factoryError)
+	}
+	if client == nil {
+		test.Fatal("expected non-nil client")
+	}
+}
+
+// TestDefaultStdioServe exercises the production stdioServe var by providing
+// a closed stdin so ServeStdio returns immediately with an EOF/read error.
+func TestDefaultStdioServe(test *testing.T) {
+	// Replace os.Stdin with a pipe that is immediately closed, so ServeStdio
+	// reads EOF and returns instead of blocking.
+	originalStdin := os.Stdin
+	pipeReader, pipeWriter, pipeError := os.Pipe()
+	if pipeError != nil {
+		test.Fatalf("failed to create pipe: %v", pipeError)
+	}
+	_ = pipeWriter.Close() // close write end so reads get EOF
+	os.Stdin = pipeReader
+	test.Cleanup(func() { os.Stdin = originalStdin; _ = pipeReader.Close() })
+
+	// Create a minimal MCP server to pass to stdioServe.
+	mcpServer := mcpserver.NewMCPServer("test", "0.0.0")
+
+	// stdioServe may return an error (EOF) which is expected; we only care
+	// that the production closure body was executed for coverage.
+	_ = stdioServe(mcpServer)
+}
+
+// TestDefaultListenFunc exercises the production listenFunc var
+// so that its function body is included in coverage.
+func TestDefaultListenFunc(test *testing.T) {
+	listener, listenError := listenFunc("tcp", "127.0.0.1:0")
+	if listenError != nil {
+		test.Fatalf("default listen func failed: %v", listenError)
+	}
+	_ = listener.Close()
+}
+
 // --- main() ---
 
 func TestMain_CallsOsExit(test *testing.T) {
@@ -199,6 +253,71 @@ func TestRun_NoAPIKey_StartsSuccessfully(test *testing.T) {
 	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
 	if exitCode != 0 {
 		test.Fatalf("expected exit code 0 (server starts without API key), got %d; stderr: %s", exitCode, stderr.String())
+	}
+}
+
+// --- Config load failure ---
+
+func TestRun_ConfigLoadFailure(test *testing.T) {
+	withCleanSecrets(test)
+	// Set an invalid log level to force config.Load() to fail.
+	test.Setenv("MCP_LOG_LEVEL", "INVALID_LEVEL_XYZ")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "failed to load config") {
+		test.Errorf("expected config error message, got: %q", stderr.String())
+	}
+}
+
+// --- Credentials file ---
+
+func TestRun_CredentialsFileLoadError(test *testing.T) {
+	withCleanSecrets(test)
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
+	// Point to a directory (not a file) to trigger credentials.NewStore failure.
+	test.Setenv("MCP_CREDENTIALS_FILE", "/dev/null/nonexistent")
+	withVerifiedRegistry(test)
+	withMockClientFactory(test, nil)
+	withMockStdio(test, nil)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 1 {
+		test.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "failed to load credentials file") {
+		test.Errorf("expected credentials file error, got: %q", stderr.String())
+	}
+}
+
+func TestRun_CredentialsFileLoadSuccess(test *testing.T) {
+	withCleanSecrets(test)
+	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
+
+	// Create a temporary valid credentials file.
+	credFile, fileError := os.CreateTemp(test.TempDir(), "creds-*.json")
+	if fileError != nil {
+		test.Fatalf("failed to create temp credentials file: %v", fileError)
+	}
+	_, _ = credFile.WriteString("{}")
+	_ = credFile.Close()
+
+	test.Setenv("MCP_CREDENTIALS_FILE", credFile.Name())
+	withVerifiedRegistry(test)
+	withMockClientFactory(test, nil)
+	withMockStdio(test, nil)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--transport", "stdio"}, &stdout, &stderr)
+	if exitCode != 0 {
+		test.Fatalf("expected exit code 0, got %d; stderr: %s", exitCode, stderr.String())
 	}
 }
 
