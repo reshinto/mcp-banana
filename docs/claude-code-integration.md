@@ -9,7 +9,7 @@ mcp-banana integrates with Claude Code as an MCP server. Claude Code communicate
 | **User scope** (`--scope user`) | Personal local development; developer-specific credentials | `~/.claude.json` (not committed) |
 | **Project scope** (`--scope project`) | Shared team configuration with no secrets | `.mcp.json` (committed to repository) |
 
-The repository includes a `.mcp.json` with a project-scoped stdio configuration. Each developer supplies their own `GEMINI_API_KEY` via user-scoped config or environment variable.
+The repository includes a `.mcp.json` with a project-scoped stdio configuration. Each developer supplies their own Gemini API key via the credentials file or self-registration headers.
 
 ---
 
@@ -25,12 +25,11 @@ Runs `mcp-banana` as a subprocess of Claude Code. Communication happens over std
 claude mcp add-json --scope user banana '{
   "command": "./mcp-banana",
   "args": ["--transport", "stdio"],
-  "env": {"GEMINI_API_KEY": "<your-key>"},
   "type": "stdio"
 }'
 ```
 
-Replace `./mcp-banana` with the absolute path to your built binary if you call this from a different directory (e.g., `/usr/local/bin/mcp-banana`). The `env` block is stored only in `~/.claude.json`.
+Replace `./mcp-banana` with the absolute path to your built binary if you call this from a different directory (e.g., `/usr/local/bin/mcp-banana`). The server uses the default `credentials.json` in its working directory to look up Gemini API keys.
 
 **Project-scoped setup (no secrets, committed to repo):**
 
@@ -42,7 +41,7 @@ claude mcp add-json --scope project banana '{
 }'
 ```
 
-This is saved to `.mcp.json`. Each developer sets `GEMINI_API_KEY` via their own user-scoped config or shell environment. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on PATH.
+This is saved to `.mcp.json`. Each developer's Gemini API key is stored in the credentials file. The `${MCP_BANANA_BIN:-mcp-banana}` syntax uses the `MCP_BANANA_BIN` environment variable if set, falling back to `mcp-banana` on PATH.
 
 ---
 
@@ -55,13 +54,13 @@ claude mcp add-json --scope user banana '{
   "type": "http",
   "url": "http://127.0.0.1:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>",
+    "Authorization": "Bearer <your-bearer-token>",
     "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-Replace `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from `.env`. The `X-Gemini-API-Key` header is optional — when omitted, the server uses its default `GEMINI_API_KEY`.
+On the first request, both headers trigger self-registration: the server writes the token-to-key mapping into the credentials file. After that, the `X-Gemini-API-Key` header is no longer needed — the server looks up the key from the credentials file using the bearer token.
 
 **SSH tunnel setup:** When using an SSH tunnel instead of a bearer token, keep the URL as `http://localhost:8847/mcp` and omit the `Authorization` header:
 
@@ -85,18 +84,20 @@ claude mcp add-json --scope user banana '{
   "type": "http",
   "url": "https://mcp.yourdomain.com:8847/mcp",
   "headers": {
-    "Authorization": "Bearer <your-mcp-auth-token>",
+    "Authorization": "Bearer <your-bearer-token>",
     "X-Gemini-API-Key": "<your-gemini-api-key>"
   }
 }'
 ```
 
-Replace `mcp.yourdomain.com` with your actual domain, `<your-mcp-auth-token>` with the value of `MCP_AUTH_TOKEN` from the server's `.env`, and `<your-gemini-api-key>` with your key from [aistudio.google.com](https://aistudio.google.com/).
+Replace `mcp.yourdomain.com` with your actual domain. Generate your own bearer token with `openssl rand -hex 32` and get your Gemini API key from [aistudio.google.com](https://aistudio.google.com/).
 
-Both headers are required in this configuration:
+Both headers are needed on the first request (self-registration):
 
-- `Authorization` — authenticates the client with the server
-- `X-Gemini-API-Key` — provides your personal Gemini API key (so Gemini charges you, not the server operator)
+- `Authorization` — your bearer token, which becomes your identity in the credentials file
+- `X-Gemini-API-Key` — your personal Gemini API key (stored in the credentials file for future requests)
+
+After self-registration, the `X-Gemini-API-Key` header is no longer needed.
 
 ---
 
@@ -147,7 +148,7 @@ Connect Claude Desktop to a remote mcp-banana server using `mcp-remote` as a std
 
 **Token refresh:** `mcp-remote` handles token refresh automatically. Access tokens expire after 1 hour; refresh tokens after 30 days. If your refresh token expires, `mcp-remote` will re-open the browser for sign-in.
 
-**Sending your own Gemini API key:** Unlike Claude Code, Claude Desktop does not support custom HTTP headers in `mcp-remote` config. If the server has no `GEMINI_API_KEY` configured, ask the server operator to set one, or use Claude Code with Option B or C instead.
+**Gemini API key:** During the OAuth sign-in flow, users are prompted to enter their Gemini API key. The server stores the key in the credentials file mapped to the user's OAuth identity (`provider:email`).
 
 ---
 
