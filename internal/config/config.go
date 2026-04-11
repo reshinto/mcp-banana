@@ -15,12 +15,10 @@ import (
 // Config holds all server configuration loaded from environment variables.
 // This struct is created once at startup and passed to components that need it.
 //
-// SECURITY: GeminiAPIKey, AuthToken, and OAuth client secrets are secrets. They must
-// never appear in any tool response, log output, error message, or health check.
+// SECURITY: CredentialsFile contains paths to secrets and OAuth client secrets are secrets.
+// They must never appear in any tool response, log output, error message, or health check.
 type Config struct {
-	GeminiAPIKey       string // The Google Gemini API key for authentication
-	AuthToken          string // Single bearer token for HTTP auth (optional, legacy)
-	AuthTokensFile     string // Path to a file with one bearer token per line (optional, hot-reloaded)
+	CredentialsFile    string // Path to unified credentials JSON file (optional, hot-reloaded)
 	LogLevel           string // Logging verbosity: "debug", "info", "warn", "error"
 	RateLimit          int    // Maximum requests per minute (default: 30)
 	GlobalConcurrency  int    // Maximum simultaneous requests across all models (default: 8)
@@ -47,13 +45,7 @@ type Config struct {
 // This "fail fast" approach ensures misconfiguration is caught at startup,
 // not when the first request arrives.
 func Load() (*Config, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	// GEMINI_API_KEY is optional when clients provide their own key via the
-	// X-Gemini-API-Key header. If neither is set, image generation requests
-	// will fail at runtime with a clear error.
-
-	authToken := os.Getenv("MCP_AUTH_TOKEN")
-	authTokensFile := os.Getenv("MCP_AUTH_TOKENS_FILE")
+	credentialsFile := os.Getenv("MCP_CREDENTIALS_FILE")
 
 	logLevel := strings.ToLower(os.Getenv("MCP_LOG_LEVEL"))
 	if logLevel == "" {
@@ -107,9 +99,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		GeminiAPIKey:       apiKey,
-		AuthToken:          authToken,
-		AuthTokensFile:     authTokensFile,
+		CredentialsFile:    credentialsFile,
 		LogLevel:           logLevel,
 		RateLimit:          rateLimit,
 		GlobalConcurrency:  globalConcurrency,

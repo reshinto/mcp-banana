@@ -10,41 +10,47 @@ import (
 
 // All tests use test.Setenv() exclusively for environment manipulation.
 // test.Setenv automatically restores the original value after the test,
-// eliminating cross-test pollution. To simulate a missing env var, use
-// test.Setenv("VAR_NAME", "") -- empty string is invalid for required
-// vars (like GEMINI_API_KEY) and triggers defaults for optional vars.
+// eliminating cross-test pollution.
 
 func TestLoad_ValidConfig(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
-	test.Setenv("MCP_AUTH_TOKEN", "abcdef0123456789abcdef0123456789ab")
+	test.Setenv("MCP_CREDENTIALS_FILE", "/tmp/test-creds.json")
 	test.Setenv("MCP_LOG_LEVEL", "debug")
 
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
 		test.Fatalf("unexpected error: %v", loadError)
 	}
-	if serverConfig.GeminiAPIKey != "test-gemini-key-placeholder-for-unit-tests" {
-		test.Errorf("unexpected API key: %s", serverConfig.GeminiAPIKey)
+	if serverConfig.CredentialsFile != "/tmp/test-creds.json" {
+		test.Errorf("unexpected CredentialsFile: %s", serverConfig.CredentialsFile)
 	}
 	if serverConfig.LogLevel != "debug" {
 		test.Errorf("unexpected log level: %s", serverConfig.LogLevel)
 	}
 }
 
-func TestLoad_EmptyAPIKey_Succeeds(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "")
+func TestLoad_CredentialsFilePopulated(test *testing.T) {
+	test.Setenv("MCP_CREDENTIALS_FILE", "/tmp/test-creds.json")
 
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
-		test.Fatalf("expected no error for empty API key (per-user keys supported), got: %v", loadError)
+		test.Fatalf("unexpected error: %v", loadError)
 	}
-	if serverConfig.GeminiAPIKey != "" {
-		test.Errorf("expected empty GeminiAPIKey, got: %s", serverConfig.GeminiAPIKey)
+	if serverConfig.CredentialsFile != "/tmp/test-creds.json" {
+		test.Errorf("expected CredentialsFile '/tmp/test-creds.json', got: %s", serverConfig.CredentialsFile)
+	}
+}
+
+func TestLoad_EmptyCredentialsFile_Succeeds(test *testing.T) {
+	serverConfig, loadError := config.Load()
+	if loadError != nil {
+		test.Fatalf("expected no error for empty credentials file, got: %v", loadError)
+	}
+	if serverConfig.CredentialsFile != "" {
+		test.Errorf("expected empty CredentialsFile, got: %s", serverConfig.CredentialsFile)
 	}
 }
 
 func TestLoad_DefaultLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "")
 
 	serverConfig, loadError := config.Load()
@@ -57,7 +63,6 @@ func TestLoad_DefaultLogLevel(test *testing.T) {
 }
 
 func TestLoad_InvalidLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "GARBAGE")
 
 	_, loadError := config.Load()
@@ -67,7 +72,6 @@ func TestLoad_InvalidLogLevel(test *testing.T) {
 }
 
 func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "abc")
 
 	_, loadError := config.Load()
@@ -77,7 +81,6 @@ func TestLoad_MalformedIntegerEnvVar(test *testing.T) {
 }
 
 func TestLoad_ZeroRateLimit(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_RATE_LIMIT", "0")
 
 	_, loadError := config.Load()
@@ -87,7 +90,6 @@ func TestLoad_ZeroRateLimit(test *testing.T) {
 }
 
 func TestLoad_NegativeConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_PRO_CONCURRENCY", "-1")
 
 	_, loadError := config.Load()
@@ -97,7 +99,6 @@ func TestLoad_NegativeConcurrency(test *testing.T) {
 }
 
 func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "4")
 	test.Setenv("MCP_PRO_CONCURRENCY", "10")
 
@@ -108,7 +109,6 @@ func TestLoad_ProConcurrencyExceedsGlobal(test *testing.T) {
 }
 
 func TestLoad_ZeroTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "0")
 
 	_, loadError := config.Load()
@@ -118,7 +118,6 @@ func TestLoad_ZeroTimeout(test *testing.T) {
 }
 
 func TestLoad_ZeroGlobalConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "0")
 
 	_, loadError := config.Load()
@@ -128,7 +127,6 @@ func TestLoad_ZeroGlobalConcurrency(test *testing.T) {
 }
 
 func TestLoad_ZeroMaxImageBytes(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_MAX_IMAGE_BYTES", "0")
 
 	_, loadError := config.Load()
@@ -138,7 +136,6 @@ func TestLoad_ZeroMaxImageBytes(test *testing.T) {
 }
 
 func TestLoad_NegativeTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "-1")
 
 	_, loadError := config.Load()
@@ -148,7 +145,6 @@ func TestLoad_NegativeTimeout(test *testing.T) {
 }
 
 func TestLoad_UppercaseLogLevel(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_LOG_LEVEL", "DEBUG")
 
 	serverConfig, loadError := config.Load()
@@ -160,21 +156,7 @@ func TestLoad_UppercaseLogLevel(test *testing.T) {
 	}
 }
 
-func TestLoad_AuthTokensFilePopulated(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
-	test.Setenv("MCP_AUTH_TOKENS_FILE", "/tmp/test-tokens.txt")
-
-	serverConfig, loadError := config.Load()
-	if loadError != nil {
-		test.Fatalf("unexpected error: %v", loadError)
-	}
-	if serverConfig.AuthTokensFile != "/tmp/test-tokens.txt" {
-		test.Errorf("expected AuthTokensFile to be '/tmp/test-tokens.txt', got: %s", serverConfig.AuthTokensFile)
-	}
-}
-
 func TestLoad_ProConcurrencyEqualsGlobal(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "5")
 	test.Setenv("MCP_PRO_CONCURRENCY", "5")
 
@@ -188,7 +170,6 @@ func TestLoad_ProConcurrencyEqualsGlobal(test *testing.T) {
 }
 
 func TestLoad_MalformedGlobalConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_GLOBAL_CONCURRENCY", "abc")
 
 	_, loadError := config.Load()
@@ -198,7 +179,6 @@ func TestLoad_MalformedGlobalConcurrency(test *testing.T) {
 }
 
 func TestLoad_MalformedMaxImageBytes(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_MAX_IMAGE_BYTES", "abc")
 
 	_, loadError := config.Load()
@@ -208,7 +188,6 @@ func TestLoad_MalformedMaxImageBytes(test *testing.T) {
 }
 
 func TestLoad_MalformedTimeout(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_REQUEST_TIMEOUT_SECS", "abc")
 
 	_, loadError := config.Load()
@@ -218,7 +197,6 @@ func TestLoad_MalformedTimeout(test *testing.T) {
 }
 
 func TestLoad_MalformedProConcurrency(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
 	test.Setenv("MCP_PRO_CONCURRENCY", "abc")
 
 	_, loadError := config.Load()
@@ -228,7 +206,6 @@ func TestLoad_MalformedProConcurrency(test *testing.T) {
 }
 
 func TestLoad_OAuthConfigFields(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForOAuthConfigTest12345678901")
 	test.Setenv("OAUTH_GOOGLE_CLIENT_ID", "google-id")
 	test.Setenv("OAUTH_GOOGLE_CLIENT_SECRET", "google-secret")
 	test.Setenv("OAUTH_BASE_URL", "https://banana.example.com:8847")
@@ -246,7 +223,6 @@ func TestLoad_OAuthConfigFields(test *testing.T) {
 }
 
 func TestLoad_TLSConfigFields(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForTLSConfigTest123456789012")
 	test.Setenv("MCP_TLS_CERT_FILE", "/certs/cert.pem")
 	test.Setenv("MCP_TLS_KEY_FILE", "/certs/key.pem")
 
@@ -260,7 +236,6 @@ func TestLoad_TLSConfigFields(test *testing.T) {
 }
 
 func TestLoad_TLSPartialConfig_ReturnsError(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "AIzaTestKeyForTLSPartialTest12345678901")
 	test.Setenv("MCP_TLS_CERT_FILE", "/certs/cert.pem")
 	// MCP_TLS_KEY_FILE intentionally missing
 
@@ -271,8 +246,6 @@ func TestLoad_TLSPartialConfig_ReturnsError(test *testing.T) {
 }
 
 func TestLoad_DefaultLimits(test *testing.T) {
-	test.Setenv("GEMINI_API_KEY", "test-gemini-key-placeholder-for-unit-tests")
-
 	serverConfig, loadError := config.Load()
 	if loadError != nil {
 		test.Fatalf("unexpected error: %v", loadError)
